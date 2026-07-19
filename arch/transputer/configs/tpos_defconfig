@@ -1,0 +1,169 @@
+# Transputer Linux 7 bring-up configuration
+# Keep this intentionally small: TCC and a 32-bit NOMMU target do not need
+# desktop/server subsystems enabled by modern Kconfig defaults.
+
+CONFIG_LOCALVERSION="-transputer"
+# CONFIG_LOCALVERSION_AUTO is not set
+CONFIG_DEFAULT_HOSTNAME="transputer"
+# CONFIG_SYSVIPC is not set
+# CONFIG_POSIX_MQUEUE is not set
+# CONFIG_AUDIT is not set
+# CONFIG_CGROUPS is not set
+# CONFIG_NAMESPACES is not set
+# CONFIG_CHECKPOINT_RESTORE is not set
+# CONFIG_KALLSYMS is not set
+# CONFIG_BPF_SYSCALL is not set
+# CONFIG_USERFAULTFD is not set
+# CONFIG_IO_URING is not set
+# CONFIG_FHANDLE is not set
+# CONFIG_ADVISE_SYSCALLS is not set
+# CONFIG_MEMBARRIER is not set
+# CONFIG_CACHESTAT_SYSCALL is not set
+# CONFIG_FUTEX is not set
+# CONFIG_EPOLL is not set
+# CONFIG_SIGNALFD is not set
+# CONFIG_TIMERFD is not set
+# CONFIG_EVENTFD is not set
+# CONFIG_AIO is not set
+# CONFIG_FANOTIFY is not set
+# CONFIG_INOTIFY_USER is not set
+# CONFIG_DNOTIFY is not set
+
+CONFIG_INIT_ENV_ARG_LIMIT=32
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_INITRAMFS_SOURCE="../rootfs/output/rootfs.cpio"
+CONFIG_INITRAMFS_COMPRESSION_NONE=y
+# CONFIG_INITRAMFS_COMPRESSION_GZIP is not set
+# CONFIG_RD_GZIP is not set
+# CONFIG_RD_BZIP2 is not set
+# CONFIG_RD_LZMA is not set
+# CONFIG_RD_XZ is not set
+# CONFIG_RD_LZO is not set
+# CONFIG_RD_LZ4 is not set
+# CONFIG_RD_ZSTD is not set
+CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+CONFIG_EXPERT=y
+CONFIG_EMBEDDED=y
+# CONFIG_MULTIUSER is not set
+# CONFIG_POSIX_TIMERS is not set
+CONFIG_PRINTK=y
+CONFIG_BUG=y
+CONFIG_BASE_SMALL=y
+# CONFIG_ELF_CORE is not set
+# CONFIG_COREDUMP is not set
+# CONFIG_MODULES is not set
+
+CONFIG_PREEMPT_NONE=y
+CONFIG_HZ_100=y
+# CONFIG_HZ_250 is not set
+CONFIG_TRANSPUTER_RAM_MIB=32
+CONFIG_TINY_RCU=y
+# CONFIG_RCU_EXPERT is not set
+CONFIG_SLAB_FREELIST_RANDOM=n
+CONFIG_SLUB_TINY=y
+# CONFIG_SLUB_DEBUG is not set
+# CONFIG_SLAB_MERGE_DEFAULT is not set
+CONFIG_INIT_STACK_NONE=y
+# CONFIG_COMPAT_BRK is not set
+# CONFIG_PROFILING is not set
+# CONFIG_PERF_EVENTS is not set
+# CONFIG_FTRACE is not set
+# CONFIG_KPROBES is not set
+
+CONFIG_BLOCK=y
+# CONFIG_BLK_DEV_BSG is not set
+# CONFIG_BLK_DEV_INTEGRITY is not set
+# CONFIG_BLK_DEV_ZONED is not set
+# CONFIG_BLOCK_LEGACY_AUTOLOAD is not set
+# CONFIG_BLK_DEV_WRITE_MOUNTED is not set
+CONFIG_PARTITION_ADVANCED=y
+# CONFIG_MSDOS_PARTITION is not set
+# CONFIG_EFI_PARTITION is not set
+# CONFIG_MQ_IOSCHED_DEADLINE is not set
+# CONFIG_MQ_IOSCHED_KYBER is not set
+
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_BINFMT_FLAT=y
+# CONFIG_BINFMT_MISC is not set
+
+CONFIG_NET=y
+# CONFIG_PACKET is not set
+CONFIG_UNIX=y
+# CONFIG_AF_UNIX_OOB is not set
+CONFIG_INET=y
+# CONFIG_INET_DIAG is not set
+# CONFIG_IPV6 is not set
+# CONFIG_NETFILTER is not set
+# CONFIG_NET_SCHED is not set
+# CONFIG_BQL is not set
+# CONFIG_ETHTOOL_NETLINK is not set
+# CONFIG_NET_RX_BUSY_POLL is not set
+# CONFIG_RPS is not set
+# CONFIG_WIRELESS is not set
+
+# CONFIG_PCI is not set
+# CONFIG_PCCARD is not set
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+# CONFIG_ALLOW_DEV_COREDUMP is not set
+# CONFIG_STANDALONE is not set
+# CONFIG_PREVENT_FIRMWARE_BUILD is not set
+# CONFIG_FW_LOADER is not set
+# CONFIG_CONNECTOR is not set
+# CONFIG_MTD is not set
+# CONFIG_SCSI is not set
+# CONFIG_ATA is not set
+# CONFIG_MD is not set
+
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+# CONFIG_INPUT_KEYBOARD is not set
+# CONFIG_INPUT_MOUSE is not set
+# CONFIG_SERIO is not set
+
+CONFIG_TTY=y
+CONFIG_UNIX98_PTYS=y
+# CONFIG_LEGACY_PTYS is not set
+# CONFIG_LEGACY_TIOCSTI is not set
+# CONFIG_LDISC_AUTOLOAD is not set
+# CONFIG_VT is not set
+# CONFIG_SERIAL_8250 is not set
+# CONFIG_DEVMEM is not set
+# CONFIG_HW_RANDOM is not set
+# CONFIG_I2C is not set
+# CONFIG_SPI is not set
+# CONFIG_POWER_RESET is not set
+# CONFIG_HWMON is not set
+# CONFIG_THERMAL is not set
+# CONFIG_WATCHDOG is not set
+
+CONFIG_FB=y
+CONFIG_FB_SIMPLE=y
+# CONFIG_DRM is not set
+# CONFIG_BACKLIGHT_CLASS_DEVICE is not set
+# CONFIG_SOUND is not set
+# CONFIG_HID is not set
+# CONFIG_USB_SUPPORT is not set
+# CONFIG_MMC is not set
+# CONFIG_NEW_LEDS is not set
+# CONFIG_RTC_CLASS is not set
+# CONFIG_DMADEVICES is not set
+# CONFIG_VIRTIO_MENU is not set
+
+CONFIG_PROC_FS=y
+# CONFIG_PROC_SYSCTL is not set
+CONFIG_SYSFS=y
+CONFIG_TMPFS=y
+# CONFIG_FILE_LOCKING is not set
+# CONFIG_NETWORK_FILESYSTEMS is not set
+# CONFIG_HUGETLBFS is not set
+# CONFIG_MISC_FILESYSTEMS is not set
+# CONFIG_NLS is not set
+
+# CONFIG_KEYS is not set
+# CONFIG_SECURITY is not set
+# CONFIG_CRYPTO is not set
+# CONFIG_VM_EVENT_COUNTERS is not set
+# CONFIG_DEBUG_KERNEL is not set
+# CONFIG_DEBUG_MISC is not set
+# CONFIG_MAGIC_SYSRQ is not set

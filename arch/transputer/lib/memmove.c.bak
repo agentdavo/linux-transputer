@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Transputer optimized memmove implementation
+ */
+
+#include <linux/types.h>
+#include <linux/string.h>
+
+void *memmove(void *dest, const void *src, size_t count)
+{
+	char *tmp;
+	const char *s;
+
+	if (dest <= src) {
+		tmp = dest;
+		s = src;
+		for (size_t i = 0; i < count; i++)
+			tmp[i] = s[i];
+	} else {
+		tmp = dest;
+		s = src;
+		for (size_t i = count; i > 0; i--)
+			tmp[i-1] = s[i-1];
+	}
+	return dest;
+}
+EXPORT_SYMBOL(memmove);

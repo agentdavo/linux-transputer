@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config TRANSPUTER
+	def_bool y
+	select ARCH_32BIT_OFF_T
+	select ARCH_HAS_BINFMT_FLAT
+	select ARCH_NO_PREEMPT
+	select ARCH_NO_SWAP
+	select BINFMT_FLAT_ARGVP_ENVP_ON_STACK
+	select CPU_NO_EFFICIENT_FFS
+	select GENERIC_ATOMIC64
+	select GENERIC_CPU_DEVICES
+	select GENERIC_IRQ_PROBE
+	select GENERIC_IRQ_SHOW
+	select HAVE_PAGE_SIZE_4KB
+	select IRQ_DOMAIN
+	select NO_DMA
+	select UACCESS_MEMCPY
+	help
+	  Support for the historic Inmos Transputer CPU family (T800/T414).
+	  This is a 32-bit, little-endian, no-MMU, uniprocessor port.
+
+config CPU_LITTLE_ENDIAN
+	def_bool y
+
+config MMU
+	def_bool n
+
+config FPU
+	def_bool y
+
+config GENERIC_CSUM
+	def_bool y
+
+config GENERIC_HWEIGHT
+	def_bool y
+
+config GENERIC_CALIBRATE_DELAY
+	def_bool y
+
+config NO_IOPORT_MAP
+	def_bool y
+
+config STACKTRACE_SUPPORT
+	def_bool y
+
+config LOCKDEP_SUPPORT
+	def_bool y
+
+config ARCH_HAS_CPU_RELAX
+	def_bool y
+
+config TIME_LOW_RES
+	def_bool y
+
+config NR_CPUS
+	int
+	default 1
+
+menu "Kernel features"
+
+source "kernel/Kconfig.hz"
+
+config TRANSPUTER_RAM_MIB
+	int "Installed RAM (MiB)"
+	range 24 256
+	default 32
+	help
+	  Amount of contiguous RAM starting at 0x80000000. This must match
+	  the T4 emulator -sm address-bit setting (32 MiB is -sm 25).
+
+endmenu
+
+config TRANSPUTER_DEBUG_HALT_AFTER_I5
+	bool "Transputer debug halt after I5"
+	default n
+	help
+	  Temporary bring-up option. If enabled, kernel_init() emits a marker
+	  immediately after I5 and then spins forever.
