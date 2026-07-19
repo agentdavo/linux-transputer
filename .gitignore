@@ -157,6 +157,9 @@ ID
 *~
 \#*#
 
+# Windows attachment metadata copied out of NTFS alternate data streams
+*:Zone.Identifier
+
 #
 # Leavings from module signing
 #

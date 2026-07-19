@@ -19,6 +19,7 @@
 #include <net/net_namespace.h>
 
 #include "sysfs.h"
+#include "../kernfs/kernfs-internal.h"
 
 static struct kernfs_root *sysfs_root;
 struct kernfs_node *sysfs_root_kn;
@@ -86,17 +87,80 @@ int __init sysfs_init(void)
 {
 	int err;
 
+	{
+		const char *s = "S0\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 	sysfs_root = kernfs_create_root(NULL, KERNFS_ROOT_EXTRA_OPEN_PERM_CHECK,
 					NULL);
+	{
+		const char *s = "S1\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 	if (IS_ERR(sysfs_root))
 		return PTR_ERR(sysfs_root);
 
 	sysfs_root_kn = kernfs_root_to_node(sysfs_root);
 
+	{
+		const char *s = "S2\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 	err = register_filesystem(&sysfs_fs_type);
+	{
+		const char *s = "S3\n";
+		int sh;
+		unsigned int e = (unsigned int)err;
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+		*(volatile unsigned int *)0x10000000u = 'e';
+		*(volatile unsigned int *)0x10000000u = '=';
+		*(volatile unsigned int *)0x10000000u = '0';
+		*(volatile unsigned int *)0x10000000u = 'x';
+		for (sh = 28; sh >= 0; sh -= 4) {
+			unsigned int d = (e >> sh) & 0xfu;
+			*(volatile unsigned int *)0x10000000u =
+				(unsigned int)(d < 10u ? '0' + d : 'a' + d - 10u);
+		}
+		*(volatile unsigned int *)0x10000000u = '\n';
+	}
 	if (err) {
+		{
+			const char *s = "SEfail\n";
+			while (*s)
+				*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+		}
 		kernfs_destroy_root(sysfs_root);
 		return err;
+	}
+
+	/* Dump root rwsem count after create+activate+register */
+	{
+		unsigned int c = (unsigned int)atomic_long_read(&sysfs_root->kernfs_rwsem.count);
+		unsigned int p = (unsigned int)(unsigned long)sysfs_root;
+		int sh;
+		const char *s = "SC";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+		*(volatile unsigned int *)0x10000000u = '0';
+		*(volatile unsigned int *)0x10000000u = 'x';
+		for (sh = 28; sh >= 0; sh -= 4) {
+			unsigned int d = (c >> sh) & 0xfu;
+			*(volatile unsigned int *)0x10000000u =
+				(unsigned int)(d < 10u ? '0' + d : 'a' + d - 10u);
+		}
+		*(volatile unsigned int *)0x10000000u = '@';
+		*(volatile unsigned int *)0x10000000u = '0';
+		*(volatile unsigned int *)0x10000000u = 'x';
+		for (sh = 28; sh >= 0; sh -= 4) {
+			unsigned int d = (p >> sh) & 0xfu;
+			*(volatile unsigned int *)0x10000000u =
+				(unsigned int)(d < 10u ? '0' + d : 'a' + d - 10u);
+		}
+		*(volatile unsigned int *)0x10000000u = '\n';
 	}
 
 	return 0;

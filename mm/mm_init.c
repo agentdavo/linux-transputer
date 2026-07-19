@@ -968,7 +968,19 @@ static void __init memmap_init_zone_range(struct zone *zone,
 static void __init memmap_init(void)
 {
 	unsigned long start_pfn, end_pfn;
+	/*
+	 * On Transputer, physical RAM starts at MinInt (0x80000000) so
+	 * ARCH_PFN_OFFSET is huge.  Starting hole_pfn at 0 makes
+	 * init_unavailable_range() walk [0, start_pfn) — hundreds of
+	 * thousands of empty pfn_valid checks — which is deadly on CHDL
+	 * cycle-accurate sim and wasteful on T4.  No mem_map slots exist
+	 * below ARCH_PFN_OFFSET, so begin the hole there.
+	 */
+#ifdef CONFIG_TRANSPUTER
+	unsigned long hole_pfn = ARCH_PFN_OFFSET;
+#else
 	unsigned long hole_pfn = 0;
+#endif
 	int i, j, zone_id = 0, nid;
 
 	for_each_mem_pfn_range(i, MAX_NUMNODES, &start_pfn, &end_pfn, &nid) {

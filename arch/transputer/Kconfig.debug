@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# For a description of the syntax of this configuration file,
+# see Documentation/kbuild/kconfig-language.rst.
+#
+
+config EARLY_PRINTK
+	bool "Early printk"
+	default y
+	help
+	  Write kernel log output directly via IServer protocol during
+	  the early boot process. This is useful for kernel debugging
+	  when normal serial driver is not available yet.

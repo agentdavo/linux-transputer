@@ -185,7 +185,48 @@ static inline void __mm_zero_struct_page(struct page *page)
 	}
 }
 #else
-#define mm_zero_struct_page(pp)  ((void)memset((pp), 0, sizeof(struct page)))
+/*
+ * 32-bit: do NOT call memset() here.  On Transputer/CHDL each stnl in
+ * memset is a full multi-stage memory op; memmap_init zeros thousands of
+ * struct pages and that path was spending tens of millions of cycles after
+ * "Initmem setup".  Unrolled stores keep mm_zero_struct_page in-line.
+ * sizeof(struct page) is constant — dead branches fold away.
+ */
+#define mm_zero_struct_page(pp) __mm_zero_struct_page32(pp)
+static inline void __mm_zero_struct_page32(struct page *page)
+{
+	unsigned long *_pp = (void *)page;
+	unsigned int words = sizeof(*page) / sizeof(unsigned long);
+
+	_pp[0] = 0;
+	_pp[1] = 0;
+	_pp[2] = 0;
+	_pp[3] = 0;
+	if (words > 4) {
+		_pp[4] = 0;
+		_pp[5] = 0;
+		_pp[6] = 0;
+		_pp[7] = 0;
+	}
+	if (words > 8) {
+		_pp[8] = 0;
+		_pp[9] = 0;
+		_pp[10] = 0;
+		_pp[11] = 0;
+	}
+	if (words > 12) {
+		_pp[12] = 0;
+		_pp[13] = 0;
+		_pp[14] = 0;
+		_pp[15] = 0;
+	}
+	if (words > 16) {
+		unsigned int i;
+
+		for (i = 16; i < words; i++)
+			_pp[i] = 0;
+	}
+}
 #endif
 
 /*

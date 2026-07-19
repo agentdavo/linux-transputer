@@ -3546,7 +3546,22 @@ static inline void mas_wr_store_entry(struct ma_wr_state *wr_mas)
 		mas_store_root(mas, wr_mas->entry);
 		break;
 	case wr_invalid:
-		MT_BUG_ON(mas->tree, 1);
+		/*
+		 * TEMP Transputer debug: do not hard-hang the emulator.
+		 * Print store_type and mas fields so we can see how we got here.
+		 */
+		{
+			static int n;
+			if (n < 4) {
+				pr_err("maple wr_invalid store_type=%u status=%u idx=%lu last=%lu\n",
+				       (unsigned)mas->store_type,
+				       (unsigned)mas->status,
+				       mas->index, mas->last);
+				n++;
+			}
+		}
+		WARN_ON_ONCE(1);
+		break;
 	}
 }
 

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0
+
+# Don't list mandatory headers here - they're automatically included
+# We provide byteorder.h, ptrace.h, sigcontext.h - mandatory headers not listed here
+generic-y += kvm_para.h

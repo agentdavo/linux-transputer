@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Transputer optimized memcpy implementation
+ */
+
+#include <linux/types.h>
+#include <linux/string.h>
+
+void *memcpy(void *dest, const void *src, size_t count)
+{
+	char *tmp = dest;
+	const char *s = src;
+
+	for (size_t i = 0; i < count; i++)
+		tmp[i] = s[i];
+
+	return dest;
+}
+EXPORT_SYMBOL(memcpy);

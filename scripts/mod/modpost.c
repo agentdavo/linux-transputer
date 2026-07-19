@@ -30,6 +30,11 @@
 
 #define MODULE_NS_PREFIX "module:"
 
+/* Unofficial ELF machine number used by the Transputer TCC target. */
+#ifndef EM_TRANSPUTER
+#define EM_TRANSPUTER	805
+#endif
+
 static bool module_enabled;
 /* Are we using CONFIG_MODVERSIONS? */
 static bool modversions;
@@ -1413,6 +1418,15 @@ static void section_rel(struct module *mod, struct elf_info *elf,
 			break;
 		case EM_MIPS:
 			taddr = addend_mips_rel(loc, r_type);
+			break;
+		case EM_TRANSPUTER:
+			/*
+			 * Transputer instruction relocations encode their addends in
+			 * variable-length prefix sequences.  The target symbol is still
+			 * sufficient for modpost's section-mismatch classification; the
+			 * address is used only when formatting its diagnostic.
+			 */
+			taddr = tsym->st_value;
 			break;
 		default:
 			fatal("Please add code to calculate addend for this architecture\n");

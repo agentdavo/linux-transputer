@@ -6262,7 +6262,17 @@ void __init mnt_init(void)
 	if (!mount_hashtable || !mountpoint_hashtable)
 		panic("Failed to allocate mount hash table\n");
 
+	{
+		const char *s = "M1\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 	kernfs_init();
+	{
+		const char *s = "M2\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 
 	err = sysfs_init();
 	if (err)
@@ -6271,9 +6281,29 @@ void __init mnt_init(void)
 	fs_kobj = kobject_create_and_add("fs", NULL);
 	if (!fs_kobj)
 		printk(KERN_WARNING "%s: kobj create error\n", __func__);
+	{
+		const char *s = "M3\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 	shmem_init();
+	{
+		const char *s = "M4\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 	init_rootfs();
+	{
+		const char *s = "M5\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 	init_mount_tree();
+	{
+		const char *s = "M6\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
 }
 
 void put_mnt_ns(struct mnt_namespace *ns)

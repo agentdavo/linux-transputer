@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0
+
+# Don't list mandatory headers here - they're automatically included
+# We provide: atomic.h, barrier.h, cmpxchg.h, page.h, pgtable.h, ptrace.h
+# All other mandatory headers will be automatically included from asm-generic
+
+# Additional optional headers we want (only list if we want generic versions)
+generic-y += extable.h
