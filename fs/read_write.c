@@ -515,21 +515,29 @@ ssize_t __kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
 	struct iov_iter iter;
 	ssize_t ret;
 
-	if (WARN_ON_ONCE(!(file->f_mode & FMODE_READ)))
+	if (WARN_ON_ONCE(!(file->f_mode & FMODE_READ))) {
+		pr_emerg("TPDBG kr: no FMODE_READ\n");
 		return -EINVAL;
-	if (!(file->f_mode & FMODE_CAN_READ))
+	}
+	if (!(file->f_mode & FMODE_CAN_READ)) {
+		pr_emerg("TPDBG kr: no FMODE_CAN_READ\n");
 		return -EINVAL;
+	}
 	/*
 	 * Also fail if ->read_iter and ->read are both wired up as that
 	 * implies very convoluted semantics.
 	 */
-	if (unlikely(!file->f_op->read_iter || file->f_op->read))
+	if (unlikely(!file->f_op->read_iter || file->f_op->read)) {
+		pr_emerg("TPDBG kr: unsupported ri=%px r=%px\n",
+			 file->f_op->read_iter, file->f_op->read);
 		return warn_unsupported(file, "read");
+	}
 
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = pos ? *pos : 0;
 	iov_iter_kvec(&iter, ITER_DEST, &iov, 1, iov.iov_len);
 	ret = file->f_op->read_iter(&kiocb, &iter);
+	pr_emerg("TPDBG kr: read_iter=%zd len=%zu\n", ret, iov.iov_len);
 	if (ret > 0) {
 		if (pos)
 			*pos = kiocb.ki_pos;
@@ -545,8 +553,10 @@ ssize_t kernel_read(struct file *file, void *buf, size_t count, loff_t *pos)
 	ssize_t ret;
 
 	ret = rw_verify_area(READ, file, pos, count);
-	if (ret)
+	if (ret) {
+		pr_emerg("TPDBG rw_verify_area=%zd\n", ret);
 		return ret;
+	}
 	return __kernel_read(file, buf, count, pos);
 }
 EXPORT_SYMBOL(kernel_read);

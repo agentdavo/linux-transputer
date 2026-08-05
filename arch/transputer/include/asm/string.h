@@ -56,6 +56,34 @@ static inline void *memset(void *s, int c, __kernel_size_t count)
 	return s;
 }
 
+/*
+ * KNOWN COST, NOT YET FIXED - see the note below before "improving" this.
+ *
+ * This byte loop compiles to ~23 instructions per byte (ldl/ldl/bsub/ldl/ldl/
+ * bsub/lb/ldc 255/and/rev/sb, plus the loop head and increment), where the
+ * T800 MOVE instruction (#4A) copies the whole block in one.  Measured on a
+ * boot: restoring the 867 KB busybox image on every applet spawn - a single
+ * memcpy - costs 38 M cycles, and five spawns plus the SD-card init make it
+ * the largest single cost in the system.  Running `true` costs 1/4000th of
+ * getting to it.
+ *
+ * Two fast paths already exist and are unreachable *because* of this
+ * definition: arch/transputer/lib/memcpy.S implements memcpy with MOVE, and
+ * the compiler's tp_try_inline_memcpy() turns a *call* to memcpy into an
+ * inline MOVE.  A static inline here means there is never a call to
+ * intercept.  (memset already avoids this via clear_page_move().)
+ *
+ * Switching to `extern void *memcpy(...)` plus memcpy.o in lib-y was tried on
+ * 2026-08-05.  It builds, links cleanly, and is *functionally correct* -
+ * c-testsuite 09099 exercises the MOVE path across sizes, alignments, zero
+ * length, return-value use and awkward argument shapes, and passes.  But the
+ * kernel drops from 13 MB to 7.5 MB (the inline was duplicated at every struct
+ * assignment), every address moves, and the boot then hangs immediately after
+ * "VFS: Finished mounting rootfs".  That smells like the known layout
+ * sensitivity in this tree rather than anything wrong with MOVE.  Reverted
+ * pending a bisect; the win is worth ~35% of boot, so it is worth doing
+ * properly.
+ */
 #define __HAVE_ARCH_MEMCPY
 static inline void *memcpy(void *dest, const void *src, __kernel_size_t count)
 {
