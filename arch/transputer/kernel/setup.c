@@ -70,7 +70,7 @@ void __init setup_arch(char **cmdline_p)
 	uart_putc_raw('B');
 
 	/* Set up command line */
-	*cmdline_p = "earlyprintk console=ttyS0 ihash_entries=256 dhash_entries=256 thash_entries=256 uhash_entries=256 rhash_entries=256 rdinit=/init";
+	*cmdline_p = "earlyprintk console=ttyS0 ignore_loglevel ihash_entries=256 dhash_entries=256 thash_entries=256 uhash_entries=256 rhash_entries=256 rdinit=/init";
 	boot_command_line[0] = '\0';
 	strscpy(boot_command_line, *cmdline_p, COMMAND_LINE_SIZE);
 	uart_putc_raw('C');

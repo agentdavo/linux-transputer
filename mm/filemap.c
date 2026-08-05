@@ -2787,12 +2787,18 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 	loff_t isize, end_offset;
 	loff_t last_pos = ra->prev_pos;
 
-	if (unlikely(iocb->ki_pos < 0))
+	if (unlikely(iocb->ki_pos < 0)) {
+		pr_emerg("TPDBG fr: ki_pos<0 (%llx)\n", (unsigned long long)iocb->ki_pos);
 		return -EINVAL;
-	if (unlikely(iocb->ki_pos >= inode->i_sb->s_maxbytes))
+	}
+	if (unlikely(iocb->ki_pos >= inode->i_sb->s_maxbytes)) {
+		pr_emerg("TPDBG fr: pos>=maxbytes\n");
 		return 0;
-	if (unlikely(!iov_iter_count(iter)))
+	}
+	if (unlikely(!iov_iter_count(iter))) {
+		pr_emerg("TPDBG fr: empty iter\n");
 		return 0;
+	}
 
 	iov_iter_truncate(iter, inode->i_sb->s_maxbytes - iocb->ki_pos);
 	folio_batch_init(&fbatch);
@@ -2812,8 +2818,10 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 			break;
 
 		error = filemap_get_pages(iocb, iter->count, &fbatch, false);
-		if (error < 0)
+		if (error < 0) {
+			pr_emerg("TPDBG fr: get_pages=%d\n", error);
 			break;
+		}
 
 		/*
 		 * i_size must be checked after we know the pages are Uptodate.

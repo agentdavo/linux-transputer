@@ -29,6 +29,7 @@
 #include <linux/wait.h>
 #include <asm/ptrace.h>
 #include <linux/sched/task.h>
+#include <linux/sched/mm.h>
 #include <asm/uart.h>
 
 extern int kernel_execve(const char *filename,
@@ -962,6 +963,19 @@ switch (number) {
 			}
 		}
 
+		/*
+		 * Pin the caller's mm before exec: kernel_execve swaps
+		 * current->mm and mmput()s the old one, freeing the CALLER'S
+		 * bFLT image pages while the spawn setjmp still points into
+		 * them.  Once child allocations reuse those pages (deep hush
+		 * init was the first to apply enough pressure) the parent's
+		 * text is zeroed and the post-SPAWN_RET return wild-jumps.
+		 * The extra reference keeps the image resident for the
+		 * lifetime of the system; the same pin also keeps the tp_bb
+		 * cached busybox image valid across later execs.
+		 */
+		if (current->mm)
+			mmget(current->mm);
 		ret = kernel_execve(path,
 				    (const char *const *)argv,
 				    (const char *const *)envp);
@@ -1096,6 +1110,9 @@ switch (number) {
 
 		/* Load the child binary */
 		memset(&regs, 0, sizeof(regs));
+		/* Pin the caller's mm — see the tp_spawn comment above. */
+		if (current->mm)
+			mmget(current->mm);
 		ret = kernel_execve(path,
 				    (const char *const *)argv,
 				    (const char *const *)envp);

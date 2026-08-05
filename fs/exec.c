@@ -1677,11 +1677,19 @@ static int search_binary_handler(struct linux_binprm *bprm)
 	struct linux_binfmt *fmt;
 	int retval;
 
+	pr_emerg("TPDBG file fs=%s f_mode=%x f_op=%px read=%px read_iter=%px\n",
+		 bprm->file->f_inode->i_sb->s_type->name,
+		 bprm->file->f_mode, bprm->file->f_op,
+		 bprm->file->f_op ? bprm->file->f_op->read : (void *)-1,
+		 bprm->file->f_op ? bprm->file->f_op->read_iter : (void *)-1);
 	retval = prepare_binprm(bprm);
+	pr_emerg("TPDBG prepare_binprm=%d buf=%02x%02x%02x%02x\n", retval,
+		 bprm->buf[0], bprm->buf[1], bprm->buf[2], bprm->buf[3]);
 	if (retval < 0)
 		return retval;
 
 	retval = security_bprm_check(bprm);
+	pr_emerg("TPDBG security_bprm_check=%d\n", retval);
 	if (retval)
 		return retval;
 
@@ -1692,6 +1700,7 @@ static int search_binary_handler(struct linux_binprm *bprm)
 		read_unlock(&binfmt_lock);
 
 		retval = fmt->load_binary(bprm);
+		pr_emerg("TPDBG load_binary ret=%d\n", retval);
 
 		read_lock(&binfmt_lock);
 		put_binfmt(fmt);
@@ -1776,6 +1785,7 @@ static int bprm_execve(struct linux_binprm *bprm)
 		goto out;
 
 	retval = exec_binprm(bprm);
+	pr_emerg("TPDBG exec_binprm=%d\n", retval);
 	if (retval < 0)
 		goto out;
 
@@ -1845,6 +1855,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 		return retval;
 
 	retval = copy_string_kernel(bprm->filename, bprm);
+	pr_emerg("TPDBG copy_fn=%d\n", retval);
 	if (retval < 0)
 		return retval;
 	bprm->exec = bprm->p;
@@ -1882,6 +1893,9 @@ int kernel_execve(const char *kernel_filename,
 	int retval;
 
 	/* It is non-sense for kernel threads to call execve */
+	pr_emerg("TPDBG kernel_execve(%s) flags=0x%lx PF_KTHREAD=%d\n",
+		 kernel_filename, (unsigned long)current->flags,
+		 !!(current->flags & PF_KTHREAD));
 	if (WARN_ON_ONCE(current->flags & PF_KTHREAD))
 		return -EINVAL;
 
@@ -1891,6 +1905,7 @@ int kernel_execve(const char *kernel_filename,
 		return PTR_ERR(bprm);
 
 	retval = count_strings_kernel(argv);
+	pr_emerg("TPDBG argc=%d\n", retval);
 	if (WARN_ON_ONCE(retval == 0))
 		return -EINVAL;
 	if (retval < 0)
@@ -1898,11 +1913,13 @@ int kernel_execve(const char *kernel_filename,
 	bprm->argc = retval;
 
 	retval = count_strings_kernel(envp);
+	pr_emerg("TPDBG envc=%d\n", retval);
 	if (retval < 0)
 		return retval;
 	bprm->envc = retval;
 
 	retval = bprm_stack_limits(bprm);
+	pr_emerg("TPDBG stack_limits=%d\n", retval);
 	if (retval < 0)
 		return retval;
 
@@ -1912,14 +1929,18 @@ int kernel_execve(const char *kernel_filename,
 	bprm->exec = bprm->p;
 
 	retval = copy_strings_kernel(bprm->envc, envp, bprm);
+	pr_emerg("TPDBG copy_envp=%d\n", retval);
 	if (retval < 0)
 		return retval;
 
 	retval = copy_strings_kernel(bprm->argc, argv, bprm);
+	pr_emerg("TPDBG copy_argv=%d\n", retval);
 	if (retval < 0)
 		return retval;
 
-	return bprm_execve(bprm);
+	retval = bprm_execve(bprm);
+	pr_emerg("TPDBG bprm_execve=%d\n", retval);
+	return retval;
 }
 
 void set_binfmt(struct linux_binfmt *new)

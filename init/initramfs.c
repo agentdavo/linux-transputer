@@ -719,7 +719,11 @@ static void __init populate_initrd_image(char *err)
 static void __init do_populate_rootfs(void *unused, async_cookie_t cookie)
 {
 	/* Load the built in initramfs */
-	char *err = unpack_to_rootfs(__initramfs_start, __initramfs_size);
+	char *err;
+	pr_emerg("TPDBG do_populate_rootfs start=%px size=%lu\n",
+		 __initramfs_start, (unsigned long)__initramfs_size);
+	err = unpack_to_rootfs(__initramfs_start, __initramfs_size);
+	pr_emerg("TPDBG unpack_to_rootfs err=%s\n", err ? err : "OK");
 	if (err)
 		panic_show_mem("%s", err); /* Failed to decompress INTERNAL initramfs */
 
@@ -784,6 +788,8 @@ static int __init populate_rootfs(void)
 {
 	initramfs_cookie = async_schedule_domain(do_populate_rootfs, NULL,
 						 &initramfs_domain);
+	pr_emerg("TPDBG populate_rootfs cookie=%llu async=%d\n",
+		 (unsigned long long)initramfs_cookie, initramfs_async);
 	usermodehelper_enable();
 	if (!initramfs_async)
 		wait_for_initramfs();
