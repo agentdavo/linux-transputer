@@ -30,6 +30,7 @@
 #include <asm/ptrace.h>
 #include <linux/sched/task.h>
 #include <linux/sched/mm.h>
+#include <linux/timekeeping.h>
 #include <asm/uart.h>
 
 extern int kernel_execve(const char *filename,
@@ -394,6 +395,7 @@ long __transputer_ioctl0(long fd, long cmd, long arg)
 #define __NR_fstat          80
 #define __NR_mount          40
 #define __NR_chdir          49
+#define __NR_faccessat      48
 #define __NR_openat         56
 #define __NR_close          57
 #define __NR_read           63
@@ -546,6 +548,14 @@ switch (number) {
 			return ret;
 		}
 		ret = sys_open((const char __user *)a1, (int)a2, (int)a3);
+		/* Keep VFS files off UART fds 0-2 — see the openat case. */
+		if (ret >= 0 && ret <= 2) {
+			long nfd = sys_fcntl((unsigned int)ret, F_DUPFD, 3);
+			if (nfd >= 3) {
+				sys_close((unsigned int)ret);
+				ret = nfd;
+			}
+		}
 		{
 			static int ologs;
 			if (ologs < 16) {
@@ -587,6 +597,20 @@ switch (number) {
 		}
 		ret = sys_openat((int)a1, (const char __user *)a2,
 				     (int)a3, (int)a4);
+		/*
+		 * fds 0-2 are hardcoded to the UART in the hybrid I/O
+		 * read/write paths, but a spawned child's fd table starts
+		 * empty, so a real file can land on fd 0 (DOOM's WAD did —
+		 * its directory reads then returned UART garbage).  Dup any
+		 * low fd up past 2 so VFS files never collide with UART.
+		 */
+		if (ret >= 0 && ret <= 2) {
+			long nfd = sys_fcntl((unsigned int)ret, F_DUPFD, 3);
+			if (nfd >= 3) {
+				sys_close((unsigned int)ret);
+				ret = nfd;
+			}
+		}
 		{
 			static int oalogs;
 			if (oalogs < 24) {
@@ -598,6 +622,18 @@ switch (number) {
 		}
 		return ret;
 	}
+
+	case __NR_faccessat:
+		/* DOOM's IdentifyVersion probes WAD paths via access(). */
+		return sys_faccessat((int)a1, (const char __user *)a2,
+				     (int)a3);
+
+	case 62: /* __NR_llseek — 32-bit asm-generic 5-arg _llseek;
+		  * uClibc lseek/lseek64 both route through it (DOOM's
+		  * W_AddFile seeks the WAD directory). */
+		return sys_llseek((unsigned int)a1, (unsigned long)a2,
+				  (unsigned long)a3, (loff_t __user *)a4,
+				  (unsigned int)a5);
 
 	case __NR_close:
 		return sys_close((unsigned int)a1);
@@ -804,6 +840,24 @@ switch (number) {
 		return 0;
 	}
 
+	case 169: { /* __NR_gettimeofday — DOOM's I_GetTime derives game
+		     * tics from it, so it must actually ADVANCE (the
+		     * LDTIMER-backed clocksource feeds timekeeping). */
+		struct timespec64 ts;
+		long *tv = (long *)a1;
+
+		if (tv) {
+			ktime_get_real_ts64(&ts);
+			tv[0] = (long)ts.tv_sec;
+			tv[1] = (long)(ts.tv_nsec / 1000);
+		}
+		return 0;
+	}
+
+	case 101: /* __NR_nanosleep — emulated time is expensive; DOOM's
+		   * I_WaitVBL usleep just returns immediately. */
+		return 0;
+
 	case __NR_uname: {
 		/* Fill struct utsname: 6 fixed-size fields of _UTSNAME_LENGTH (65)
 		 * bytes each — sysname, nodename, release, version, machine,
@@ -840,7 +894,9 @@ switch (number) {
 		unsigned long addr;
 		int order;
 
-		if (len == 0 || len > (4UL << 20))
+		/* Cap matches ARCH_FORCE_MAX_ORDER=12 (16 MiB buddy blocks);
+		 * DOOM's zone arena is a single 6 MiB allocation. */
+		if (len == 0 || len > (16UL << 20))
 			return -EINVAL;
 		order = get_order(len);
 		addr = __get_free_pages(GFP_KERNEL, order);

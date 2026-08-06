@@ -100,6 +100,13 @@ void __init setup_arch(char **cmdline_p)
 	 * early boot from initialising pages that the emulator does not own. */
 	memory_end = 0x80000000UL +
 		(CONFIG_TRANSPUTER_RAM_MIB * 1024UL * 1024UL);
+	/* A kernel image (e.g. with an embedded WAD initramfs) larger than
+	 * the configured RAM makes end - start wrap negative-unsigned, and
+	 * memblock then believes it owns ~2 GiB — the percpu allocator
+	 * "stall at mem auto-init, 515304 pages" failure.  Refuse loudly. */
+	if (memory_start >= memory_end)
+		panic("kernel image ends above CONFIG_TRANSPUTER_RAM_MIB=%d MiB — raise it (and t4 -sm)",
+		      CONFIG_TRANSPUTER_RAM_MIB);
 
 	/* Set up init_mm structure - use __linker_* surrogates */
 	init_mm.start_code = __linker_stext;
