@@ -57,6 +57,15 @@ config NR_CPUS
 	int
 	default 1
 
+config ARCH_FORCE_MAX_ORDER
+	int
+	default 12
+	help
+	  Allow buddy allocations up to 16 MiB (order 12).  NOMMU userspace
+	  gets anonymous memory as physically contiguous pages through the
+	  mmap2 syscall handler; DOOM's zone allocator alone needs a single
+	  6 MiB block, which the default order-10 (4 MiB) cap cannot serve.
+
 menu "Kernel features"
 
 source "kernel/Kconfig.hz"
