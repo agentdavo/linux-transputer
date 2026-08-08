@@ -876,6 +876,13 @@ static int load_flat_binary(struct linux_binprm *bprm)
 	stack_len += (bprm->argc + 1) * sizeof(char *);   /* the argv array */
 	stack_len += (bprm->envc + 1) * sizeof(char *);   /* the envp array */
 	stack_len = ALIGN(stack_len, FLAT_STACK_ALIGN);
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * Extra private pages below the entry WPtr so Phase 9 Q3 stack
+	 * windows can size-align without aliasing foreign phys (hard P).
+	 */
+	stack_len += 128 * 1024;
+#endif
 
 	res = load_flat_file(bprm, &libinfo, &stack_len);
 	if (res < 0)
@@ -915,6 +922,14 @@ static int load_flat_binary(struct linux_binprm *bprm)
 #endif
 	if (res)
 		return res;
+
+	/*
+	 * Phase 9: transputer_flat_q3_publish() (arch/.../flat_q3.c) can move
+	 * WPtr into Q3 with RODS relocate.  It is not called by default —
+	 * under hard P, init dies after getpid (IPtr=0) even with a safe
+	 * phys window.  Keep the helper + 128KiB stack pad for bring-up.
+	 * Call publish here when that path is fixed.
+	 */
 
 	/* Fake some return addresses to ensure the call chain will
 	 * initialise library in order for us.  We are required to call

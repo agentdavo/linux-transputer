@@ -5,6 +5,7 @@
 #include <linux/types.h>
 #include <asm/ptrace.h>
 #include <asm/segment.h>
+#include <asm/t9000_softprot.h>
 
 
 /* CPU specific flags */
@@ -37,6 +38,9 @@ struct thread_struct {
 	
 	/* Saved kernel stack pointer */
 	unsigned long ksp;
+
+	/* Per-task soft L/P region shadow (Phase 4 soft-mm). */
+	struct t9k_soft_mm soft_mm;
 };
 
 #define INIT_THREAD  { \
@@ -47,6 +51,7 @@ struct thread_struct {
 	.creg = 0, \
 	.status = 0, \
 	.ksp = 0, \
+	.soft_mm = { .flags = 0 }, \
 }
 
 /* CPU idle */
@@ -74,6 +79,7 @@ static inline void prepare_to_copy(struct task_struct *tsk)
 	(regs)->breg = 0;			\
 	(regs)->creg = 0;			\
 	(regs)->status = 0x1;			\
+	t9k_on_exec_finish(regs);		\
 } while (0)
 
 /* Get kernel stack EIP for a task */

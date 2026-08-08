@@ -59,7 +59,7 @@ EXPORT_SYMBOL(machine_power_off);
  */
 extern void schedule_tail(struct task_struct *prev);
 extern void do_exit(long code);
-extern void __transputer_enter_exec(unsigned long entry, unsigned long wptr);
+extern void t9k_enter_userspace(unsigned long entry, unsigned long wptr);
 
 /*
  * ret_from_fork — entry point for newly created kernel threads.
@@ -101,7 +101,7 @@ void ret_from_fork(void)
 			struct pt_regs *regs = current_pt_regs();
 
 			if (user_mode(regs))
-				__transputer_enter_exec(regs->iptr, regs->wptr);
+				t9k_enter_userspace(regs->iptr, regs->wptr);
 		}
 		do_exit(ret);
 	}

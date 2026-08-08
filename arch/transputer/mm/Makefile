@@ -2,7 +2,7 @@
 #
 # Makefile for the Transputer-specific parts of the memory manager.
 #
-
-obj-y	:= init.o
-obj-y	+= extable.o
-obj-y	+= fault.o
+obj-y := init.o
+obj-y += extable.o
+obj-y += fault.o
+obj-y += uaccess.o
