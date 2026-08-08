@@ -1112,7 +1112,8 @@ static void __bh_submit(struct buffer_head *bh, blk_opf_t opf,
 	if (IS_ENABLED(CONFIG_FS_ENCRYPTION))
 		buffer_set_crypto_ctx(bio, bh, GFP_NOIO);
 
-	bio->bi_iter.bi_sector = bh->b_blocknr * (bh->b_size >> 9);
+	bvec_iter_set_sector32(&bio->bi_iter,
+		(u32)bh->b_blocknr * (bh->b_size >> 9));
 	bio->bi_write_hint = write_hint;
 
 	if (bh->b_folio)

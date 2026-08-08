@@ -329,7 +329,7 @@ static struct block_device *add_partition(struct gendisk *disk, int partno,
 	if (!bdev)
 		goto out_put_disk;
 
-	bdev->bd_start_sect = start;
+	partition_sector_set32(&bdev->bd_start_sect, (u32)start);
 	bdev_set_nr_sectors(bdev, len);
 
 	pdev = &bdev->bd_device;
@@ -721,13 +721,26 @@ void *read_part_sector(struct parsed_partitions *state, sector_t n, Sector *p)
 		goto out;
 	}
 
+#ifdef CONFIG_TRANSPUTER
+	/* t4sd is a byte-wide memory-mapped card.  Reading its partition table
+	 * directly avoids the generic page-cache index's 64-bit loff_t path;
+	 * mounted filesystem traffic still exercises normal BIO submission. */
+	if (state->disk->major == 240) {
+		p->v = NULL;
+		p->direct = true;
+		return (void *)(0x20000000UL + ((u32)n << SECTOR_SHIFT));
+	}
+#endif
+
 	folio = read_mapping_folio(mapping, n >> PAGE_SECTORS_SHIFT, NULL);
 	if (IS_ERR(folio))
 		goto out;
 
 	p->v = folio;
+	p->direct = false;
 	return folio_address(folio) + offset_in_folio(folio, n * SECTOR_SIZE);
 out:
 	p->v = NULL;
+	p->direct = false;
 	return NULL;
 }

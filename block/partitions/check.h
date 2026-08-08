@@ -26,20 +26,33 @@ struct parsed_partitions {
 
 typedef struct {
 	struct folio *v;
+	bool direct;
 } Sector;
 
 void *read_part_sector(struct parsed_partitions *state, sector_t n, Sector *p);
 static inline void put_dev_sector(Sector p)
 {
-	folio_put(p.v);
+	if (!p.direct)
+		folio_put(p.v);
+}
+
+static inline void partition_sector_set32(sector_t *dst, u32 value)
+{
+#ifdef CONFIG_TRANSPUTER
+	u32 *words = (u32 *)dst;
+	words[0] = value;
+	words[1] = 0;
+#else
+	*dst = value;
+#endif
 }
 
 static inline void
 put_partition(struct parsed_partitions *p, int n, sector_t from, sector_t size)
 {
 	if (n < p->limit) {
-		p->parts[n].from = from;
-		p->parts[n].size = size;
+		partition_sector_set32(&p->parts[n].from, (u32)from);
+		partition_sector_set32(&p->parts[n].size, (u32)size);
 		seq_buf_printf(&p->pp_buf, " %s%d", p->name, n);
 	}
 }

@@ -70,7 +70,18 @@ void __init setup_arch(char **cmdline_p)
 	uart_putc_raw('B');
 
 	/* Set up command line */
-	*cmdline_p = "earlyprintk console=ttyS0 ignore_loglevel ihash_entries=256 dhash_entries=256 thash_entries=256 uhash_entries=256 rhash_entries=256 rdinit=/init";
+	/*
+	 * t9k_enforce  — soft-mm ACTIVE (quarter-identity access_ok)
+	 * t9k_hard_p   — enter user via goprot (P-process); implies enforce
+	 */
+	/*
+	 * t9k_enforce  — soft-mm ACTIVE (quarter-identity access_ok)
+	 * t9k_hard_p   — enter user via goprot (implies enforce)
+	 */
+	*cmdline_p = "earlyprintk console=ttyS0 ignore_loglevel "
+		     "ihash_entries=256 dhash_entries=256 thash_entries=256 "
+		     "uhash_entries=256 rhash_entries=256 rdinit=/init "
+		     "t9k_enforce t9k_hard_p";
 	boot_command_line[0] = '\0';
 	strscpy(boot_command_line, *cmdline_p, COMMAND_LINE_SIZE);
 	uart_putc_raw('C');
@@ -124,6 +135,10 @@ void __init setup_arch(char **cmdline_p)
 	/* The always-on display DMA scans this firmware-owned RAM surface.
 	 * Keep the full 2 MiB aligned carveout away from the page allocator. */
 	memblock_reserve(TRANSPUTER_FB_BASE, TRANSPUTER_FB_CARVEOUT_SIZE);
+	/* Retained-surface compositor SHM used by FBWM and guest GUI apps. */
+	memblock_reserve(TRANSPUTER_COMPOSE_BASE, TRANSPUTER_COMPOSE_SIZE);
+	/* Atomic present scratch: compose off-aperture then copy once. */
+	memblock_reserve(TRANSPUTER_SCRATCH_BASE, TRANSPUTER_SCRATCH_SIZE);
 	min_low_pfn = memory_start >> PAGE_SHIFT;
 	max_low_pfn = memory_end >> PAGE_SHIFT;
 	max_pfn = max_low_pfn;

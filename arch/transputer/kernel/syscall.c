@@ -53,7 +53,8 @@ long __transputer_syscall(long number, long a1, long a2, long a3,
  *   [0] = caller WPtr, [1] = caller IPtr, [2..9] = workspace slots 0-7
  */
 static long spawn_jmpbuf[10];
-static int  spawn_active;    /* nonzero when a spawn context is live */
+static long spawn_jmpbuf_nest[10]; /* one-level nest (fbwm→tman under init→fbwm) */
+static int  spawn_active;    /* 0=none, 1=outer soft, 2=nested soft */
 
 /*
  * Parent stack guard: on NOMMU, child mmap can land on the parent's
@@ -356,6 +357,7 @@ static volatile unsigned long hw_spawn_parent_desc;
 static volatile unsigned long *hw_spawn_parent_desc_ptr = &hw_spawn_parent_desc;
 
 extern void __transputer_enter_exec(unsigned long entry, unsigned long wptr);
+extern void t9k_enter_userspace(unsigned long entry, unsigned long wptr);
 
 /*
  * Syscall gateway for NOMMU userspace.
@@ -401,6 +403,8 @@ long __transputer_ioctl0(long fd, long cmd, long arg)
 #define __NR_read           63
 #define __NR_write          64
 #define __NR_writev         66
+#define __NR_sync           81
+#define __NR_fsync          82
 #define __NR_exit           93
 #define __NR_exit_group     94
 #define __NR_waitid         95
@@ -507,6 +511,134 @@ static int tp_open_path(const char *path, long flags)
 }
 
 /*
+ * getdents64 helper — classic linux_dirent64 layout with fixed d_name
+ * offset 19 (TCC pads flexible arrays to 20, which breaks busybox/tman).
+ * Uses iterate_dir so virtual filesystems like /proc emit PID entries.
+ */
+#define TP_DE_NAME   19
+#define TP_DE_ALIGN(n)  (((n) + 7) & ~7U)
+
+struct tp_getdents_buf {
+	struct dir_context ctx;
+	char __user *dirp;
+	unsigned int count;
+	unsigned int filled;
+	int error;
+	unsigned short prev_reclen;
+};
+
+static bool tp_filldir64(struct dir_context *ctx, const char *name,
+			 int namlen, loff_t offset, u64 ino,
+			 unsigned int d_type)
+{
+	struct tp_getdents_buf *b =
+		container_of(ctx, struct tp_getdents_buf, ctx);
+	unsigned int reclen;
+	unsigned short rl;
+	unsigned char ty;
+	s64 off;
+	char __user *dst;
+
+	if (namlen < 0 || namlen > 255) {
+		b->error = -EINVAL;
+		return false;
+	}
+	reclen = TP_DE_ALIGN(TP_DE_NAME + (unsigned int)namlen + 1);
+	if (b->filled + reclen > b->count) {
+		/* Buffer full — stop iteration; caller keeps prior f_pos. */
+		b->error = 0;
+		return false;
+	}
+
+	dst = b->dirp + b->filled;
+	off = (s64)offset;
+	rl = (unsigned short)reclen;
+	ty = (unsigned char)(d_type & 0xFF);
+
+	if (copy_to_user(dst + 0, &ino, 8) ||
+	    copy_to_user(dst + 8, &off, 8) ||
+	    copy_to_user(dst + 16, &rl, 2) ||
+	    copy_to_user(dst + 18, &ty, 1) ||
+	    copy_to_user(dst + TP_DE_NAME, name, (unsigned long)namlen) ||
+	    copy_to_user(dst + TP_DE_NAME + namlen, "", 1)) {
+		b->error = -EFAULT;
+		return false;
+	}
+
+	/* Patch previous entry's d_off to this offset (classic ABI). */
+	if (b->prev_reclen) {
+		char __user *prev = dst - b->prev_reclen;
+		if (copy_to_user(prev + 8, &off, 8)) {
+			b->error = -EFAULT;
+			return false;
+		}
+	}
+
+	b->filled += reclen;
+	b->prev_reclen = rl;
+	b->error = 0;
+	return true;
+}
+
+static long tp_getdents64(unsigned int fd, char __user *dirp,
+			  unsigned int count)
+{
+	struct file *file;
+	struct tp_getdents_buf buf;
+	long ret;
+
+	if (count < 24)
+		return -EINVAL;
+	if (count > 65536)
+		count = 65536;
+
+	file = fget(fd);
+	if (!file)
+		return -EBADF;
+
+	memset(&buf, 0, sizeof(buf));
+	buf.ctx.actor = tp_filldir64;
+	buf.ctx.pos = file->f_pos;
+	buf.ctx.count = (int)count;
+	buf.dirp = dirp;
+	buf.count = count;
+
+	ret = iterate_dir(file, &buf.ctx);
+	file->f_pos = buf.ctx.pos;
+
+	if (ret < 0 && buf.filled == 0) {
+		fput(file);
+		return ret;
+	}
+	if (buf.error < 0 && buf.filled == 0) {
+		fput(file);
+		return buf.error;
+	}
+
+	/* Final d_off on last entry = current f_pos */
+	if (buf.prev_reclen) {
+		char __user *last = dirp + buf.filled - buf.prev_reclen;
+		s64 last_off = (s64)buf.ctx.pos;
+
+		if (copy_to_user(last + 8, &last_off, 8)) {
+			fput(file);
+			return -EFAULT;
+		}
+	}
+
+	{
+		static int gd;
+		if (gd < 8) {
+			printk("getdents64_iter: fd=%u filled=%u pos=%lld\n",
+			       fd, buf.filled, (long long)buf.ctx.pos);
+			gd++;
+		}
+	}
+	fput(file);
+	return (long)buf.filled;
+}
+
+/*
  * __transputer_syscall - main syscall entry point
  *
  * Called directly from userspace via C function call.
@@ -524,7 +656,7 @@ long __transputer_syscall(long number, long a1, long a2, long a3,
 		if (ret == 0) {
 			struct pt_regs *regs = current_pt_regs();
 
-			__transputer_enter_exec(regs->iptr, regs->wptr);
+			t9k_enter_userspace(regs->iptr, regs->wptr);
 			return -ENOEXEC;
 		}
 		return ret;
@@ -638,6 +770,13 @@ switch (number) {
 	case __NR_close:
 		return sys_close((unsigned int)a1);
 
+	case __NR_sync:
+		ksys_sync();
+		return 0;
+
+	case __NR_fsync:
+		return sys_fsync((unsigned int)a1);
+
 	case __NR_dup:
 		return sys_dup((unsigned int)a1);
 
@@ -694,21 +833,14 @@ switch (number) {
 
 	case __NR_exit:
 	case __NR_exit_group:
-		if (spawn_active) {
-			int code = (int)a1;
-			const char *p = "SPAWN_EXIT:";
-			while (*p)
-				uart_putc_raw(*p++);
-			uart_putc_raw('0' + ((code / 100) % 10));
-			uart_putc_raw('0' + ((code / 10) % 10));
-			uart_putc_raw('0' + (code % 10));
-			uart_putc_raw('\n');
-			spawn_active = 0;
-			/* longjmp back to the tp_spawn caller */
-			__transputer_spawn_longjmp(spawn_jmpbuf, code ? code : 256);
-			/* never reached */
-		}
-		/* Check if this is a hw_spawn child — RUNP the parent */
+		/*
+		 * Prefer hardware-spawn resume over soft setjmp/longjmp.
+		 * Nested case: init soft-spawns fbwm (spawn_active=1), then
+		 * fbwm hw-spawns tman.  When tman exits, taking the soft path
+		 * first longjmps back to *init* and kills the auto-demo
+		 * (no TMAN_DONE / no DOOM).  Hardware parent desc means this
+		 * exit belongs to an hw_spawn child.
+		 */
 		if (hw_spawn_parent_desc != 0) {
 			const char *p = "HW_EXIT:RUNP\n";
 			while (*p)
@@ -718,6 +850,35 @@ switch (number) {
 			/* Child STOPPs itself after RUNPing parent */
 			__asm__ __volatile__(".byte 0x21, 0xF5"); /* stopp */
 			while (1) ;
+		}
+		if (spawn_active) {
+			int code = (int)a1;
+			long *jb;
+			const char *p = "SPAWN_EXIT:";
+			while (*p)
+				uart_putc_raw(*p++);
+			uart_putc_raw('0' + ((code / 100) % 10));
+			uart_putc_raw('0' + ((code / 10) % 10));
+			uart_putc_raw('0' + (code % 10));
+			uart_putc_raw('\n');
+			/*
+			 * Leave T9000 P-mode + clear child soft-mm before
+			 * longjmp to parent.  C-call exit does not trap.
+			 */
+			{
+				extern void t9k_soft_mm_clear(struct task_struct *t);
+				t9k_soft_mm_clear(current);
+			}
+			/* Nested soft spawn returns to nest jmpbuf first. */
+			if (spawn_active >= 2) {
+				jb = spawn_jmpbuf_nest;
+				spawn_active = 1;
+			} else {
+				jb = spawn_jmpbuf;
+				spawn_active = 0;
+			}
+			__transputer_spawn_longjmp(jb, code ? code : 256);
+			/* never reached */
 		}
 		__asm__ __volatile__(".byte 0x21, 0xF5");
 		while (1)
@@ -941,13 +1102,13 @@ switch (number) {
 		const char *const *envp = (const char *const *)a3;
 		struct pt_regs regs;
 
-		if (spawn_active) {
-			/* Nested spawn not supported */
+		if (spawn_active >= 2) {
+			/* Only one nest level (init→fbwm→app). */
 			return -EAGAIN;
 		}
 
 		{
-			const char *p = "SPAWN:";
+			const char *p = spawn_active ? "SPAWN_NEST:" : "SPAWN:";
 			while (*p)
 				uart_putc_raw(*p++);
 			p = path ? path : "(null)";
@@ -959,8 +1120,12 @@ switch (number) {
 		/*
 		 * setjmp returns 0 on first call, and the exit code
 		 * when longjmp fires from the child's exit().
+		 * Nested soft spawns use spawn_jmpbuf_nest.
 		 */
-		ret = __transputer_spawn_setjmp(spawn_jmpbuf);
+		{
+			long *jb = spawn_active ? spawn_jmpbuf_nest : spawn_jmpbuf;
+			ret = __transputer_spawn_setjmp(jb);
+		}
 		if (ret != 0) {
 			/*
 			 * We're back from the child's exit.
@@ -1002,7 +1167,7 @@ switch (number) {
 			if (ret == 0) {
 				regs.iptr = entry;
 				regs.wptr = wptr;
-				spawn_active = 1;
+				spawn_active = spawn_active ? 2 : 1;
 				tp_spawn_mmap_reset();
 				{
 					const char *pmsg = "SPAWN_GO:";
@@ -1013,8 +1178,8 @@ switch (number) {
 					uart_debug_hex32(regs.wptr);
 					uart_putc_raw('\n');
 				}
-				__transputer_enter_exec(regs.iptr, regs.wptr);
-				spawn_active = 0;
+				t9k_enter_userspace(regs.iptr, regs.wptr);
+				spawn_active = spawn_active >= 2 ? 1 : 0;
 				return -ENOEXEC;
 			}
 		}
@@ -1114,7 +1279,7 @@ switch (number) {
 		}
 
 		/* Mark spawn as active so exit() knows to longjmp */
-		spawn_active = 1;
+		spawn_active = spawn_active ? 2 : 1;
 		tp_spawn_mmap_reset();
 
 
@@ -1128,11 +1293,11 @@ switch (number) {
 			uart_putc_raw('\n');
 		}
 
-		/* Enter child — this "returns" via longjmp when child exits */
-		__transputer_enter_exec(regs.iptr, regs.wptr);
+		/* Enter child as P-process (goprot) or classic L enter_exec */
+		t9k_enter_userspace(regs.iptr, regs.wptr);
 
 		/* Should never reach here */
-		spawn_active = 0;
+		spawn_active = spawn_active >= 2 ? 1 : 0;
 		return -ENOEXEC;
 	}
 
@@ -1140,70 +1305,76 @@ switch (number) {
 		/*
 		 * Hardware-assisted spawn using T800 STOPP/RUNP.
 		 *
-		 * a1 = path, a2 = argv, a3 = envp
-		 *
-		 * The parent truly suspends via STOPP — the hardware removes
-		 * it from the scheduling queue. The child runs as a real
-		 * hardware-scheduled process. When the child calls exit(),
-		 * the exit handler RUNPs the parent back to life.
-		 *
-		 * This is TRUE concurrency: the child runs on the hardware
-		 * process queue alongside any other transputer processes.
+		 * Nested under an outer soft tp_spawn (init→fbwm→tman/doom):
+		 * STOPP/RUNP resume is unreliable on T4 after kernel_execve, and
+		 * child exit used to longjmp the outer soft context.  Fall back
+		 * to nested soft spawn (spawn_jmpbuf_nest) so auto-demo continues.
 		 */
-		const char *path = (const char *)a1;
-		const char *const *argv = (const char *const *)a2;
-		const char *const *envp = (const char *const *)a3;
-		struct pt_regs regs;
-		int ret;
-
-		{
-			const char *p = "HW_SPAWN:";
-			while (*p) uart_putc_raw(*p++);
-			p = path ? path : "(null)";
-			while (*p) uart_putc_raw(*p++);
-			uart_putc_raw('\n');
+		if (spawn_active) {
+			const char *p = "HW_SPAWN_AS_SOFT\n";
+			while (*p)
+				uart_putc_raw(*p++);
+			/* Re-dispatch as soft nested spawn (same args). */
+			return __transputer_syscall(__NR_tp_spawn, a1, a2, a3,
+						    0, 0, 0);
 		}
 
-		/* Load the child binary */
-		memset(&regs, 0, sizeof(regs));
-		/* Pin the caller's mm — see the tp_spawn comment above. */
-		if (current->mm)
-			mmget(current->mm);
-		ret = kernel_execve(path,
-				    (const char *const *)argv,
-				    (const char *const *)envp);
-		if (ret < 0)
-			return ret;
-		regs = *current_pt_regs();
-
-		hw_spawn_parent_desc = 0;
-
 		{
-			const char *p = "HW_SPAWN_GO:";
-			while (*p) uart_putc_raw(*p++);
-			uart_debug_hex32(regs.iptr);
-			uart_putc_raw(':');
-			uart_debug_hex32(regs.wptr);
-			uart_putc_raw('\n');
-		}
+			const char *path = (const char *)a1;
+			const char *const *argv = (const char *const *)a2;
+			const char *const *envp = (const char *const *)a3;
+			struct pt_regs regs;
+			int ret;
 
-		/*
-		 * This call:
-		 * 1. Stores child IPtr at child_wptr[-1]
-		 * 2. Saves parent descriptor at hw_spawn_parent_desc
-		 * 3. RUNPs the child (adds to hardware queue)
-		 * 4. STOPPs the parent (suspends — removed from queue)
-		 * 5. When child exits and RUNPs us, we resume here
-		 */
-		__transputer_hw_spawn_parent(regs.wptr, regs.iptr,
-					     &hw_spawn_parent_desc);
+			{
+				const char *p = "HW_SPAWN:";
+				while (*p) uart_putc_raw(*p++);
+				p = path ? path : "(null)";
+				while (*p) uart_putc_raw(*p++);
+				uart_putc_raw('\n');
+			}
 
-		/* We're back! Child has exited. */
-		{
-			const char *p = "HW_SPAWN_DONE\n";
-			while (*p) uart_putc_raw(*p++);
+			/* Load the child binary */
+			memset(&regs, 0, sizeof(regs));
+			/* Pin the caller's mm — see the tp_spawn comment above. */
+			if (current->mm)
+				mmget(current->mm);
+			ret = kernel_execve(path,
+					    (const char *const *)argv,
+					    (const char *const *)envp);
+			if (ret < 0)
+				return ret;
+			regs = *current_pt_regs();
+
+			hw_spawn_parent_desc = 0;
+
+			{
+				const char *p = "HW_SPAWN_GO:";
+				while (*p) uart_putc_raw(*p++);
+				uart_debug_hex32(regs.iptr);
+				uart_putc_raw(':');
+				uart_debug_hex32(regs.wptr);
+				uart_putc_raw('\n');
+			}
+
+			/*
+			 * This call:
+			 * 1. Stores child IPtr at child_wptr[-1]
+			 * 2. Saves parent descriptor at hw_spawn_parent_desc
+			 * 3. RUNPs the child (adds to hardware queue)
+			 * 4. STOPPs the parent (suspends — removed from queue)
+			 * 5. When child exits and RUNPs us, we resume here
+			 */
+			__transputer_hw_spawn_parent(regs.wptr, regs.iptr,
+						     &hw_spawn_parent_desc);
+
+			/* We're back! Child has exited. */
+			{
+				const char *p = "HW_SPAWN_DONE\n";
+				while (*p) uart_putc_raw(*p++);
+			}
+			return 0;
 		}
-		return 0;
 	}
 
 	case __NR_wait4:
@@ -1264,173 +1435,9 @@ switch (number) {
 		return 0;  /* root */
 
 
-	case 61: { /* __NR_getdents64 — direct walk, fixed layout */
-		/*
-		 * filldir_t ABI is broken on this port. Walk dcache and emit
-		 * classic linux_dirent64 with FIXED offsets (no compiler padding):
-		 *   0:u64 ino, 8:s64 off, 16:u16 reclen, 18:u8 type, 19:name...
-		 * TCC pads flexible-array structs so offsetof(d_name)==20, which
-		 * makes busybox readdir see empty names and ls stat "/bin/" forever.
-		 */
-		unsigned int fd = (unsigned int)a1;
-		char __user *dirp = (char __user *)a2;
-		unsigned int count = (unsigned int)a3;
-		struct file *file;
-		struct dentry *dentry, *child;
-		long filled = 0;
-		unsigned int seen;
-
-		/* Classic linux_dirent64 name offset */
-#define TP_DE_NAME  19
-#define TP_DE_ALIGN(n)  (((n) + 7) & ~7U)
-
-		/* Never write more than the user asked — expanding a small
-		 * buffer was a footgun; clamp only the upper bound. */
-		if (count < 24)
-			return -EINVAL;
-		if (count > 65536)
-			count = 65536;
-
-		file = fget(fd);
-		if (!file)
-			return -EBADF;
-		dentry = file->f_path.dentry;
-		if (!dentry || !dentry->d_inode) {
-			fput(file);
-			return -ENOENT;
-		}
-
-		if (file->f_pos >= 100000) {
-			fput(file);
-			return 0;
-		}
-
-		if (file->f_pos == 0) {
-			const char *name = ".";
-			unsigned int reclen = TP_DE_ALIGN(TP_DE_NAME + 2);
-			u64 ino = dentry->d_inode->i_ino;
-			s64 off = 1;
-			unsigned short rl = (unsigned short)reclen;
-			unsigned char ty = 4; /* DT_DIR */
-			if (filled + reclen > count)
-				goto out_done;
-			if (copy_to_user(dirp + filled + 0, &ino, 8) ||
-			    copy_to_user(dirp + filled + 8, &off, 8) ||
-			    copy_to_user(dirp + filled + 16, &rl, 2) ||
-			    copy_to_user(dirp + filled + 18, &ty, 1) ||
-			    copy_to_user(dirp + filled + TP_DE_NAME, name, 2))
-				goto out_fault;
-			filled += reclen;
-			file->f_pos = 1;
-		}
-		if (file->f_pos == 1) {
-			const char *name = "..";
-			unsigned int reclen = TP_DE_ALIGN(TP_DE_NAME + 3);
-			struct dentry *parent = dentry->d_parent ? dentry->d_parent : dentry;
-			u64 ino = parent->d_inode ? parent->d_inode->i_ino : 1;
-			s64 off = 2;
-			unsigned short rl = (unsigned short)reclen;
-			unsigned char ty = 4;
-			if (filled + reclen > count)
-				goto out_done;
-			if (copy_to_user(dirp + filled + 0, &ino, 8) ||
-			    copy_to_user(dirp + filled + 8, &off, 8) ||
-			    copy_to_user(dirp + filled + 16, &rl, 2) ||
-			    copy_to_user(dirp + filled + 18, &ty, 1) ||
-			    copy_to_user(dirp + filled + TP_DE_NAME, name, 3))
-				goto out_fault;
-			filled += reclen;
-			file->f_pos = 2;
-		}
-
-		seen = 0;
-		spin_lock(&dentry->d_lock);
-		child = d_first_child(dentry);
-		while (child) {
-			unsigned int namelen, reclen, skip_n;
-			unsigned char dtype = 0;
-			u64 ino;
-			s64 off;
-			unsigned short rl;
-			unsigned char ty;
-
-			if (!child->d_inode) {
-				child = d_next_sibling(child);
-				continue;
-			}
-			if (child->d_name.len == 1 && child->d_name.name[0] == '.') {
-				child = d_next_sibling(child);
-				continue;
-			}
-
-			skip_n = (file->f_pos >= 2) ? (unsigned int)(file->f_pos - 2) : 0;
-			if (seen < skip_n) {
-				seen++;
-				child = d_next_sibling(child);
-				continue;
-			}
-			seen++;
-
-			namelen = child->d_name.len;
-			reclen = TP_DE_ALIGN(TP_DE_NAME + namelen + 1);
-			if (filled + reclen > count) {
-				spin_unlock(&dentry->d_lock);
-				goto out_done;
-			}
-			if (S_ISDIR(child->d_inode->i_mode))
-				dtype = 4;
-			else if (S_ISLNK(child->d_inode->i_mode))
-				dtype = 10;
-			else if (S_ISREG(child->d_inode->i_mode))
-				dtype = 8;
-			else if (S_ISCHR(child->d_inode->i_mode))
-				dtype = 2;
-			else if (S_ISBLK(child->d_inode->i_mode))
-				dtype = 6;
-			else
-				dtype = 0;
-
-			ino = child->d_inode->i_ino;
-			off = file->f_pos + 1;
-			rl = (unsigned short)reclen;
-			ty = dtype;
-			spin_unlock(&dentry->d_lock);
-
-			if (copy_to_user(dirp + filled + 0, &ino, 8) ||
-			    copy_to_user(dirp + filled + 8, &off, 8) ||
-			    copy_to_user(dirp + filled + 16, &rl, 2) ||
-			    copy_to_user(dirp + filled + 18, &ty, 1) ||
-			    copy_to_user(dirp + filled + TP_DE_NAME,
-					 child->d_name.name, namelen) ||
-			    copy_to_user(dirp + filled + TP_DE_NAME + namelen,
-					 "", 1))
-				goto out_fault;
-
-			filled += reclen;
-			file->f_pos++;
-			spin_lock(&dentry->d_lock);
-			child = d_first_child(dentry);
-			seen = 0;
-		}
-		spin_unlock(&dentry->d_lock);
-		file->f_pos = 100000;
-
-out_done:
-		{
-			static int gd;
-			if (gd < 16) {
-				printk("getdents64_direct: fd=%u filled=%ld pos=%lu\n",
-				       fd, filled, file->f_pos);
-				gd++;
-			}
-		}
-		fput(file);
-		return filled;
-
-out_fault:
-		fput(file);
-		return -EFAULT;
-	}
+	case 61: /* __NR_getdents64 — iterate_dir + classic fixed layout */
+		return tp_getdents64((unsigned int)a1, (char __user *)a2,
+				     (unsigned int)a3);
 
 
 case 35: /* __NR_unlinkat */
