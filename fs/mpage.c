@@ -177,9 +177,27 @@ static void do_mpage_readpage(struct mpage_readpage_args *args)
 	if (folio_buffers(folio))
 		goto confused;
 
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * The TCC backend does not reliably lower a 64-bit return value followed
+	 * by a shift.  Keep the page-cache block calculation in native words and
+	 * initialise both halves of sector_t explicitly.  SD images are limited
+	 * to 128 MiB, so no useful address bits are lost here.
+	 */
+	((u32 *)&block_in_file)[0] =
+		(u32)folio->index << (PAGE_SHIFT - blkbits);
+	((u32 *)&block_in_file)[1] = 0;
+	((u32 *)&last_block)[0] = ((u32 *)&block_in_file)[0] +
+		((args->nr_pages * PAGE_SIZE) >> blkbits);
+	((u32 *)&last_block)[1] = 0;
+	((u32 *)&last_block_in_file)[0] =
+		((u32)inode->i_size + blocksize - 1) >> blkbits;
+	((u32 *)&last_block_in_file)[1] = 0;
+#else
 	block_in_file = folio_pos(folio) >> blkbits;
 	last_block = block_in_file + ((args->nr_pages * PAGE_SIZE) >> blkbits);
 	last_block_in_file = (i_size_read(inode) + blocksize - 1) >> blkbits;
+#endif
 	if (last_block > last_block_in_file)
 		last_block = last_block_in_file;
 	page_block = 0;
@@ -283,11 +301,25 @@ static void do_mpage_readpage(struct mpage_readpage_args *args)
 
 alloc_new:
 	if (args->bio == NULL) {
+		u32 sector32;
+
 		args->bio = bio_alloc(bdev, bio_max_segs(args->nr_pages), opf,
 				      gfp);
 		if (args->bio == NULL)
 			goto confused;
-		args->bio->bi_iter.bi_sector = first_block << (blkbits - 9);
+		/* A block-device mapping is linear.  On Transputer, derive its
+		 * sector from the native-word folio index instead of round-tripping
+		 * block zero through loff_t/sector_t shifts in folio_pos(). */
+#ifdef CONFIG_TRANSPUTER
+		if (S_ISBLK(inode->i_mode))
+			sector32 = (u32)folio->index << PAGE_SECTORS_SHIFT;
+		else
+			sector32 = ((u32 *)&first_block)[0] << (blkbits - 9);
+#else
+		sector32 = (u32)(first_block << (blkbits - 9));
+#endif
+		bvec_iter_set_sector32(&args->bio->bi_iter,
+			sector32);
 	}
 
 	length = first_hole << blkbits;
@@ -597,7 +629,8 @@ alloc_new:
 		bio = bio_alloc(bdev, BIO_MAX_VECS,
 				REQ_OP_WRITE | wbc_to_write_flags(wbc),
 				GFP_NOFS);
-		bio->bi_iter.bi_sector = first_block << (blkbits - 9);
+		bvec_iter_set_sector32(&bio->bi_iter,
+			(u32)first_block << (blkbits - 9));
 		wbc_init_bio(wbc, bio);
 		bio->bi_write_hint = inode->i_write_hint;
 	}

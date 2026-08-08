@@ -18,8 +18,8 @@
 #define SD_SIZE         (128 * 1024 * 1024)  /* 128MB */
 #define SD_SECTOR_SIZE  512
 #define SD_SECTORS      (SD_SIZE / SD_SECTOR_SIZE)
-#define SD_MAJOR        0   /* dynamic major */
-#define SD_MINORS       1
+#define SD_MAJOR        240 /* local/experimental, stable for early userspace */
+#define SD_MINORS       16  /* whole disk plus MBR partitions */
 #define SD_NAME         "t4sd"
 
 static int t4sd_major;
@@ -29,15 +29,15 @@ static struct gendisk *t4sd_disk;
  * Copy between a bio segment and the MMIO SD region.
  * kaddr is the mapped page address + bv_offset.
  */
-static void t4sd_transfer(unsigned long sd_off, void *buf,
-                          unsigned int len, int write)
+static int t4sd_transfer(unsigned long sd_off, void *buf,
+                         unsigned int len, int write)
 {
     volatile unsigned char *sd;
     unsigned char *p;
     unsigned long i;
 
-    if (sd_off + len > SD_SIZE)
-        return;
+    if (sd_off > SD_SIZE || len > SD_SIZE - sd_off)
+        return -EIO;
 
     sd = (volatile unsigned char *)(SD_BASE + sd_off);
     p = (unsigned char *)buf;
@@ -49,6 +49,8 @@ static void t4sd_transfer(unsigned long sd_off, void *buf,
         for (i = 0; i < len; i++)
             p[i] = sd[i];
     }
+
+    return 0;
 }
 
 /*
@@ -58,11 +60,11 @@ static void t4sd_submit_bio(struct bio *bio)
 {
     struct bio_vec *bvec;
     struct bvec_iter iter;
-    sector_t sector;
+    unsigned long sd_off;
     int rw;
 
-    sector = bio->bi_iter.bi_sector;
-    if (sector + (bio->bi_iter.bi_size >> SECTOR_SHIFT) > SD_SECTORS) {
+    sd_off = (unsigned long)bvec_iter_sector32(&bio->bi_iter) << SECTOR_SHIFT;
+    if (sd_off > SD_SIZE || bio->bi_iter.bi_size > SD_SIZE - sd_off) {
         bio_io_error(bio);
         return;
     }
@@ -75,7 +77,6 @@ static void t4sd_submit_bio(struct bio *bio)
         unsigned int len;
 	struct page *page;
 	void *buf;
-        unsigned long sd_off = (unsigned long)sector * SD_SECTOR_SIZE;
 
 	bvec = &bio->bi_io_vec[iter.bi_idx];
 	offset = bvec->bv_offset + iter.bi_bvec_done;
@@ -87,8 +88,11 @@ static void t4sd_submit_bio(struct bio *bio)
 	page = bvec->bv_page + (offset >> PAGE_SHIFT);
 	buf = page_address(page) + (offset & (PAGE_SIZE - 1));
 
-        t4sd_transfer(sd_off, buf, len, (rw != READ));
-        sector += len >> SECTOR_SHIFT;
+	if (t4sd_transfer(sd_off, buf, len, (rw != READ)) < 0) {
+		bio_io_error(bio);
+		return;
+	}
+	sd_off += len;
 	iter.bi_size -= len;
 	iter.bi_bvec_done += len;
 	if (iter.bi_bvec_done == bvec->bv_len) {
@@ -126,11 +130,12 @@ static int __init t4sd_init(void)
     };
     int ret;
 
-    t4sd_major = register_blkdev(SD_MAJOR, SD_NAME);
-    if (t4sd_major < 0) {
+    ret = register_blkdev(SD_MAJOR, SD_NAME);
+    if (ret < 0) {
         printk("t4sd: unable to register block device\n");
-        return t4sd_major;
+        return ret;
     }
+    t4sd_major = SD_MAJOR;
 
     t4sd_disk = blk_alloc_disk(&lim, NUMA_NO_NODE);
     if (IS_ERR(t4sd_disk)) {

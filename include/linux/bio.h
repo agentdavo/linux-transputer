@@ -111,7 +111,7 @@ static inline bool bio_next_segment(const struct bio *bio,
 static inline void bio_advance_iter(const struct bio *bio,
 				    struct bvec_iter *iter, unsigned int bytes)
 {
-	iter->bi_sector += bytes >> 9;
+	bvec_iter_add_sector32(iter, bytes >> 9);
 
 	if (bio_no_advance_iter(bio))
 		iter->bi_size -= bytes;
@@ -125,7 +125,7 @@ static inline void bio_advance_iter_single(const struct bio *bio,
 					   struct bvec_iter *iter,
 					   unsigned int bytes)
 {
-	iter->bi_sector += bytes >> 9;
+	bvec_iter_add_sector32(iter, bytes >> 9);
 
 	if (bio_no_advance_iter(bio))
 		iter->bi_size -= bytes;

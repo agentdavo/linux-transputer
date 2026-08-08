@@ -622,7 +622,11 @@ static void ext2_splice_branch(struct inode *inode,
  * return < 0, error case.
  */
 static int ext2_get_blocks(struct inode *inode,
+#ifdef CONFIG_TRANSPUTER
+			   unsigned long iblock, unsigned long maxblocks,
+#else
 			   sector_t iblock, unsigned long maxblocks,
+#endif
 			   u32 *bno, bool *new, bool *boundary,
 			   int create)
 {
@@ -637,11 +641,20 @@ static int ext2_get_blocks(struct inode *inode,
 	struct ext2_inode_info *ei = EXT2_I(inode);
 	int count = 0;
 	ext2_fsblk_t first_block = 0;
+#ifdef CONFIG_TRANSPUTER
+	/* Keep the internal helper ABI native-word-only.  A sector_t argument in
+	 * the middle of this seven-argument call shifts the following output
+	 * pointers in the current backend. */
+	long logical_block = iblock;
+#else
+	long logical_block = iblock;
+#endif
 
 	if (WARN_ON_ONCE(maxblocks == 0))
 		return -EINVAL;
 
-	depth = ext2_block_to_path(inode,iblock,offsets,&blocks_to_boundary);
+	depth = ext2_block_to_path(inode, logical_block, offsets,
+				  &blocks_to_boundary);
 
 	if (depth == 0)
 		return -EIO;
@@ -719,7 +732,7 @@ static int ext2_get_blocks(struct inode *inode,
 	if (S_ISREG(inode->i_mode) && (!ei->i_block_alloc_info))
 		ext2_init_block_alloc_info(inode);
 
-	goal = ext2_find_goal(inode, iblock, partial);
+	goal = ext2_find_goal(inode, logical_block, partial);
 
 	/* the number of blocks need to allocate for [d,t]indirect blocks */
 	indirect_blks = (chain + depth) - partial - 1;
@@ -742,7 +755,7 @@ static int ext2_get_blocks(struct inode *inode,
 
 	*new = true;
 
-	ext2_splice_branch(inode, iblock, partial, indirect_blks, count);
+	ext2_splice_branch(inode, logical_block, partial, indirect_blks, count);
 	mutex_unlock(&ei->truncate_mutex);
 got_it:
 	if (count > blocks_to_boundary)
@@ -763,17 +776,53 @@ cleanup:
 int ext2_get_block(struct inode *inode, sector_t iblock,
 		struct buffer_head *bh_result, int create)
 {
+#ifdef CONFIG_TRANSPUTER
+	u32 logical_block = ((u32 *)&iblock)[0];
+#endif
 	unsigned max_blocks = bh_result->b_size >> inode->i_blkbits;
 	bool new = false, boundary = false;
 	u32 bno;
 	int ret;
 
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * Recover the logical block directly from the native-word page-cache
+	 * coordinates.  The backend currently corrupts the low word of sector_t
+	 * in several div/shift call sequences before get_block is reached.
+	 * b_data supplies the within-folio offset for buffered writes; mpage's
+	 * synthetic map_bh intentionally has offset zero.
+	 */
+	if (bh_result->b_folio) {
+		u32 logical = (u32)bh_result->b_folio->index <<
+			(PAGE_SHIFT - inode->i_blkbits);
+
+		if (bh_result->b_data)
+			logical += bh_offset(bh_result) >> inode->i_blkbits;
+		logical_block = logical;
+	}
+#endif
+
+#ifdef CONFIG_TRANSPUTER
+	ret = ext2_get_blocks(inode, logical_block, max_blocks, &bno, &new,
+			      &boundary, create);
+#else
 	ret = ext2_get_blocks(inode, iblock, max_blocks, &bno, &new, &boundary,
 			create);
+#endif
 	if (ret <= 0)
 		return ret;
 
+#ifdef CONFIG_TRANSPUTER
+	/* Do not route the physical ext2 block through an implicit u32->u64
+	 * argument conversion in map_bh(). */
+	set_buffer_mapped(bh_result);
+	bh_result->b_bdev = inode->i_sb->s_bdev;
+	((u32 *)&bh_result->b_blocknr)[0] = bno;
+	((u32 *)&bh_result->b_blocknr)[1] = 0;
+	bh_result->b_size = inode->i_sb->s_blocksize;
+#else
 	map_bh(bh_result, inode->i_sb, bno);
+#endif
 	bh_result->b_size = (ret << inode->i_blkbits);
 	if (new)
 		set_buffer_new(bh_result);
@@ -1145,7 +1194,14 @@ static void __ext2_truncate_blocks(struct inode *inode, loff_t offset)
 	long iblock;
 	unsigned blocksize;
 	blocksize = inode->i_sb->s_blocksize;
+#ifdef CONFIG_TRANSPUTER
+	/* O_TRUNC arrives through a loff_t argument; keep the sub-4GiB ext2
+	 * logical block calculation in the native low word. */
+	iblock = (((u32 *)&offset)[0] + blocksize - 1) >>
+		 EXT2_BLOCK_SIZE_BITS(inode->i_sb);
+#else
 	iblock = (offset + blocksize-1) >> EXT2_BLOCK_SIZE_BITS(inode->i_sb);
+#endif
 
 
 	n = ext2_block_to_path(inode, iblock, offsets, NULL);

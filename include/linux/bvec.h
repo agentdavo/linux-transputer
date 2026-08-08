@@ -113,6 +113,39 @@ struct bvec_iter {
 	unsigned int		bi_bvec_done;
 } __packed __aligned(4);
 
+/* The Transputer backend is 32-bit and all platform block devices fit in a
+ * 32-bit sector number.  Keep sector stores and increments word-sized: this
+ * avoids routing packed struct-member updates through the generic 64-bit
+ * expression path, while retaining Linux's sector_t ABI and layout. */
+static inline void bvec_iter_set_sector32(struct bvec_iter *iter, u32 sector)
+{
+#ifdef CONFIG_TRANSPUTER
+	u32 *words = (u32 *)&iter->bi_sector;
+	words[0] = sector;
+	words[1] = 0;
+#else
+	iter->bi_sector = (sector_t)sector;
+#endif
+}
+
+static inline u32 bvec_iter_sector32(const struct bvec_iter *iter)
+{
+#ifdef CONFIG_TRANSPUTER
+	return ((const u32 *)&iter->bi_sector)[0];
+#else
+	return (u32)iter->bi_sector;
+#endif
+}
+
+static inline void bvec_iter_add_sector32(struct bvec_iter *iter, u32 sectors)
+{
+#ifdef CONFIG_TRANSPUTER
+	bvec_iter_set_sector32(iter, bvec_iter_sector32(iter) + sectors);
+#else
+	iter->bi_sector += sectors;
+#endif
+}
+
 struct bvec_iter_all {
 	struct bio_vec	bv;
 	int		idx;

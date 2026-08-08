@@ -625,7 +625,7 @@ static int blk_partition_remap(struct bio *bio)
 	if (unlikely(should_fail_request(p, bio->bi_iter.bi_size)))
 		return -EIO;
 	if (bio_sectors(bio)) {
-		bio->bi_iter.bi_sector += p->bd_start_sect;
+		bvec_iter_add_sector32(&bio->bi_iter, (u32)p->bd_start_sect);
 		trace_block_bio_remap(bio, p->bd_dev,
 				      bio->bi_iter.bi_sector -
 				      p->bd_start_sect);
