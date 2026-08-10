@@ -167,6 +167,37 @@ extern void warn_bogus_irq_restore(void);
  */
 #define raw_local_irq_disable()		arch_local_irq_disable()
 #define raw_local_irq_enable()		arch_local_irq_enable()
+#ifdef CONFIG_TRANSPUTER
+/*
+ * TCC do { } while (0) miscompile (2026-01-17): the backend uses the *last
+ * expression value* of the body as the while condition instead of the literal
+ * 0.  raw_local_irq_save/save_flags end with `flags = arch_*()` which leaves
+ * AReg = previous mask (often 1 after early boot local_irq_disable).  The
+ * loop then re-enters forever — first hit is boot_cpu_init → atomic bitops →
+ * raw_local_irq_save, UART trail …ii and wild Iptr.  Force a trailing 0 so
+ * the bogus condition is still false.  arch_* restore/disable/enable already
+ * return 0 for the same reason (see asm/irqflags.h).
+ */
+#define raw_local_irq_save(flags)			\
+	do {						\
+		typecheck(unsigned long, flags);	\
+		flags = arch_local_irq_save();		\
+		0;					\
+	} while (0)
+#define raw_local_irq_restore(flags)			\
+	do {						\
+		typecheck(unsigned long, flags);	\
+		raw_check_bogus_irq_restore();		\
+		arch_local_irq_restore(flags);		\
+		0;					\
+	} while (0)
+#define raw_local_save_flags(flags)			\
+	do {						\
+		typecheck(unsigned long, flags);	\
+		flags = arch_local_save_flags();	\
+		0;					\
+	} while (0)
+#else
 #define raw_local_irq_save(flags)			\
 	do {						\
 		typecheck(unsigned long, flags);	\
@@ -183,6 +214,7 @@ extern void warn_bogus_irq_restore(void);
 		typecheck(unsigned long, flags);	\
 		flags = arch_local_save_flags();	\
 	} while (0)
+#endif /* CONFIG_TRANSPUTER */
 #define raw_irqs_disabled_flags(flags)			\
 	({						\
 		typecheck(unsigned long, flags);	\
@@ -234,11 +266,20 @@ extern void warn_bogus_irq_restore(void);
 
 #else /* !CONFIG_TRACE_IRQFLAGS */
 
+#ifdef CONFIG_TRANSPUTER
+/* Same TCC trailing-0 requirement when the body is only a macro call. */
+#define local_irq_enable()	do { raw_local_irq_enable(); 0; } while (0)
+#define local_irq_disable()	do { raw_local_irq_disable(); 0; } while (0)
+#define local_irq_save(flags)	do { raw_local_irq_save(flags); 0; } while (0)
+#define local_irq_restore(flags) do { raw_local_irq_restore(flags); 0; } while (0)
+#define safe_halt()		do { raw_safe_halt(); 0; } while (0)
+#else
 #define local_irq_enable()	do { raw_local_irq_enable(); } while (0)
 #define local_irq_disable()	do { raw_local_irq_disable(); } while (0)
 #define local_irq_save(flags)	do { raw_local_irq_save(flags); } while (0)
 #define local_irq_restore(flags) do { raw_local_irq_restore(flags); } while (0)
 #define safe_halt()		do { raw_safe_halt(); } while (0)
+#endif /* CONFIG_TRANSPUTER */
 
 #endif /* CONFIG_TRACE_IRQFLAGS */
 

@@ -3155,6 +3155,23 @@ void set_cpu_possible(unsigned int cpu, bool possible)
  */
 void __init boot_cpu_init(void)
 {
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * Plain CPU0 mask install.  Avoid set_cpu_* / assign_bit / atomic
+	 * bitops this early: after marker '2' (post set_cpu_online) the
+	 * assign_bit path in set_cpu_active was hanging (wild Iptr).  NR_CPUS=1
+	 * so one word per mask is enough.  Revisit once bitops are solid.
+	 */
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'0';
+	*(volatile unsigned long *)cpumask_bits(&__cpu_online_mask) = 1UL;
+	*(volatile unsigned long *)cpumask_bits(&__cpu_active_mask) = 1UL;
+	*(volatile unsigned long *)cpumask_bits(&__cpu_present_mask) = 1UL;
+	*(volatile unsigned long *)cpumask_bits(&__cpu_possible_mask) = 1UL;
+	/* atomic_t is a counter int; avoid atomic_set → irq save path */
+	*(volatile int *)&__num_online_cpus.counter = 1;
+	__num_possible_cpus = 1;
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'5';
+#else
 	int cpu = smp_processor_id();
 
 	/* Mark the boot cpu "present", "online" etc for SMP and UP case */
@@ -3165,6 +3182,7 @@ void __init boot_cpu_init(void)
 
 #ifdef CONFIG_SMP
 	__boot_cpu_id = cpu;
+#endif
 #endif
 }
 

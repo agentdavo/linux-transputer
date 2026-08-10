@@ -17,6 +17,7 @@
 #include <asm/sections.h>
 #include <asm/simplefb.h>
 #include <asm/uart.h>
+#include <asm/thds.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
 
@@ -69,21 +70,23 @@ void __init setup_arch(char **cmdline_p)
 	}
 	uart_putc_raw('B');
 
-	/* Set up command line */
-	/*
-	 * t9k_enforce  — soft-mm ACTIVE (quarter-identity access_ok)
-	 * t9k_hard_p   — enter user via goprot (P-process); implies enforce
-	 */
-	/*
-	 * t9k_enforce  — soft-mm ACTIVE (quarter-identity access_ok)
-	 * t9k_hard_p   — enter user via goprot (implies enforce)
-	 */
-	*cmdline_p = "earlyprintk console=ttyS0 ignore_loglevel "
-		     "ihash_entries=256 dhash_entries=256 thash_entries=256 "
-		     "uhash_entries=256 rhash_entries=256 rdinit=/init "
-		     "t9k_enforce t9k_hard_p";
-	boot_command_line[0] = '\0';
-	strscpy(boot_command_line, *cmdline_p, COMMAND_LINE_SIZE);
+	/* Set up command line — byte loop (avoid sized_strscpy / TCC edge cases) */
+	{
+		static const char cmd[] =
+			"earlyprintk console=ttyS0 ignore_loglevel "
+			"ihash_entries=256 dhash_entries=256 thash_entries=256 "
+			"uhash_entries=256 rhash_entries=256 rdinit=/init "
+			"t9k_enforce t9k_hard_p";
+		unsigned int i;
+
+		uart_putc_raw('1');
+		*cmdline_p = (char *)cmd;
+		uart_putc_raw('2');
+		for (i = 0; i < COMMAND_LINE_SIZE - 1 && cmd[i]; i++)
+			boot_command_line[i] = cmd[i];
+		boot_command_line[i] = '\0';
+		uart_putc_raw('3');
+	}
 	uart_putc_raw('C');
 
 	/* Set up early console for linux_banner */
@@ -91,15 +94,24 @@ void __init setup_arch(char **cmdline_p)
 	uart_putc_raw('D');
 
 	/*
+	 * L-process THDS (optional): leave G null-THDS before this so head
+	 * markers stay G-safe; install real THDS so later overflow/illegal
+	 * L-trap instead of G-halt (ISM §10.1.3).
+	 */
+	/* Markers live inside the helper (`t`/`s`/`h`/`L` or `!`+hex).
+	 * Do not branch on the C return value: after uart_putc_raw the
+	 * AReg residue can make `== 0` look false even when selth stuck. */
+	(void)t9k_thds_boot_install();
+
+	/*
 	 * === Memory initialization (modern NOMMU/memblock pattern) ===
 	 *
-	 * Transputer memory layout (tpos_defconfig uses -sm 25 = 32MiB):
+	 * Transputer memory layout:
+	 *   T4 default: CONFIG_TRANSPUTER_RAM_MIB=32, FB @ 0x81e00000
+	 *   SPINE chip: CONFIG_TRANSPUTER_SPINE_CHIP, RAM 128, FB @ 0x81000000
 	 *   0x80000000  MemStart (MinInt)
 	 *   0x80000070  _stext (kernel code start, ELF entry)
-	 *   ...         kernel code + data + bss
-	 *   _end        end of kernel image
-	 *   ...         free memory
-	 *   memory_end  MemStart + CONFIG_TRANSPUTER_RAM_MIB
+	 *   ...         free memory to memory_end
 	 *
 	 * PAGE_OFFSET = 0, so PFN = addr >> PAGE_SHIFT directly.
 	 */
@@ -125,20 +137,81 @@ void __init setup_arch(char **cmdline_p)
 	init_mm.end_data = __linker_edata;
 	init_mm.brk = (unsigned long)0;
 	uart_putc_raw('E');
+	/* Debug: dump memory_start/end high nibbles if end looks wrong */
+	if (memory_start >= memory_end || memory_start < 0x80000000UL) {
+		uart_putc_raw('!');
+		uart_putc_raw('m'); /* bad memory bounds */
+	}
+
+	/*
+	 * TCC / section init can leave memblock.memory.cnt or total_size
+	 * non-zero while regions[0].size is still 0 — that trips WARN_ON in
+	 * memblock_add_range and has hung early boot (trail …EEww, never '1').
+	 * Force a clean empty type before the first add.
+	 */
+	{
+		extern struct memblock memblock;
+		memblock.memory.cnt = 0;
+		memblock.memory.total_size = 0;
+		if (memblock.memory.regions)
+			memblock.memory.regions[0].size = 0;
+		memblock.reserved.cnt = 0;
+		memblock.reserved.total_size = 0;
+		if (memblock.reserved.regions)
+			memblock.reserved.regions[0].size = 0;
+	}
+	uart_putc_raw('0'); /* memblock scrubbed */
 
 	/*
 	 * Describe only allocatable RAM to memblock.  Excluding the kernel image
 	 * keeps ARCH_PFN_OFFSET at the first page represented by FLATMEM, which is
 	 * the same high-address invariant used by the working 2.6 port.
+	 *
+	 * Direct first-region install: memblock_add_range() has hung/WARN'd on
+	 * this port after E (trail …E0w, never '1').  One empty→single region
+	 * is trivial — do it by hand.
 	 */
-	memblock_add(memory_start, memory_end - memory_start);
-	/* The always-on display DMA scans this firmware-owned RAM surface.
-	 * Keep the full 2 MiB aligned carveout away from the page allocator. */
-	memblock_reserve(TRANSPUTER_FB_BASE, TRANSPUTER_FB_CARVEOUT_SIZE);
-	/* Retained-surface compositor SHM used by FBWM and guest GUI apps. */
-	memblock_reserve(TRANSPUTER_COMPOSE_BASE, TRANSPUTER_COMPOSE_SIZE);
-	/* Atomic present scratch: compose off-aperture then copy once. */
-	memblock_reserve(TRANSPUTER_SCRATCH_BASE, TRANSPUTER_SCRATCH_SIZE);
+	{
+		extern struct memblock memblock;
+		struct memblock_region *r = &memblock.memory.regions[0];
+		phys_addr_t sz = (phys_addr_t)(memory_end - memory_start);
+
+		r->base = (phys_addr_t)memory_start;
+		r->size = sz;
+		r->flags = 0;
+		memblock.memory.cnt = 1;
+		memblock.memory.total_size = sz;
+	}
+	uart_putc_raw('1'); /* after memory region install */
+	/*
+	 * FB / compose / scratch carveouts — install reserved regions by hand
+	 * (same TCC/memblock_add_range hang as memory).  Adjacent 2MiB blocks
+	 * at 0x81000000.. merge into one reserved range.
+	 */
+	{
+		extern struct memblock memblock;
+		struct memblock_region *r = &memblock.reserved.regions[0];
+		phys_addr_t rbase = (phys_addr_t)TRANSPUTER_FB_BASE;
+		phys_addr_t rend = (phys_addr_t)(TRANSPUTER_SCRATCH_BASE +
+						 TRANSPUTER_SCRATCH_SIZE);
+		phys_addr_t rsz;
+
+		if (rbase < (phys_addr_t)memory_start)
+			rbase = (phys_addr_t)memory_start;
+		if (rend > (phys_addr_t)memory_end)
+			rend = (phys_addr_t)memory_end;
+		rsz = (rend > rbase) ? (rend - rbase) : 0;
+		if (rsz) {
+			r->base = rbase;
+			r->size = rsz;
+			r->flags = 0;
+			memblock.reserved.cnt = 1;
+			memblock.reserved.total_size = rsz;
+		}
+	}
+	uart_putc_raw('2');
+	uart_putc_raw('3');
+	uart_putc_raw('4');
 	min_low_pfn = memory_start >> PAGE_SHIFT;
 	max_low_pfn = memory_end >> PAGE_SHIFT;
 	max_pfn = max_low_pfn;
@@ -158,10 +231,12 @@ void __init setup_arch(char **cmdline_p)
 	 * preset_lpj is checked first in calibrate_delay().
 	 */
 	preset_lpj = 4096;
+	uart_putc_raw('Q');
 
 	/*
 	 * Publish after BSS/data initialization and before the first userspace
 	 * task.  bFLT binaries use this fixed NOMMU gateway for VFS syscalls.
 	 */
 	tp_publish_syscall_gate();
+	uart_putc_raw('R'); /* setup_arch complete */
 }

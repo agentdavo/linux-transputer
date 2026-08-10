@@ -12,6 +12,10 @@
 
 #define DEBUG		/* Enable initcall_debug */
 
+#ifdef CONFIG_TRANSPUTER
+#include <asm/uart.h>	/* uart_putc_raw boot markers (full Linux bring-up) */
+#endif
+
 #include <linux/types.h>
 #include <linux/export.h>
 #include <linux/extable.h>
@@ -974,25 +978,54 @@ void start_kernel(void)
 	char *command_line;
 	char *after_dashes;
 
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('a'); /* enter start_kernel */
+#endif
 	set_task_stack_end_magic(&init_task);
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('b');
+#endif
 	smp_setup_processor_id();
 	debug_objects_early_init();
 	init_vmlinux_build_id();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('c');
+#endif
 
 	cgroup_init_early();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('d');
+#endif
 
 	local_irq_disable();
 	early_boot_irqs_disabled = true;
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('i'); /* irqs disabled */
+#endif
 
 	/*
 	 * Interrupts are still disabled. Do necessary setups, then
 	 * enable them.
 	 */
 	boot_cpu_init();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('j'); /* boot_cpu_init */
+#endif
 	page_address_init();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('e'); /* before setup_arch */
+	/* Skip pr_notice banner — needs console; raw marker only */
+#else
 	pr_notice("%s", linux_banner);
+#endif
 	setup_arch(&command_line);
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('M'); /* mm_core_init_early */
+#endif
 	mm_core_init_early();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('N');
+#endif
 	/* Static keys and static calls are needed by LSMs */
 	jump_label_init();
 	static_call_init();
@@ -1031,7 +1064,13 @@ void start_kernel(void)
 	vfs_caches_init_early();
 	sort_main_extable();
 	trap_init();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('O'); /* before mm_core_init (buddy) */
+#endif
 	mm_core_init();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('U'); /* after mm_core_init */
+#endif
 	maple_tree_init();
 	poking_init();
 	ftrace_init();
@@ -1044,7 +1083,13 @@ void start_kernel(void)
 	 * timer interrupt). Full topology setup happens at smp_init()
 	 * time - but meanwhile we still have a functioning scheduler.
 	 */
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('V'); /* sched_init */
+#endif
 	sched_init();
+#ifdef CONFIG_TRANSPUTER
+	uart_putc_raw('W');
+#endif
 
 	if (WARN(!irqs_disabled(),
 		 "Interrupts were enabled *very* early, fixing it\n"))
