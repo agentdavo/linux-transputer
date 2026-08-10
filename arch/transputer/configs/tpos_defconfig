@@ -168,3 +168,12 @@ CONFIG_EXT2_FS=y
 # CONFIG_DEBUG_KERNEL is not set
 # CONFIG_DEBUG_MISC is not set
 # CONFIG_MAGIC_SYSRQ is not set
+
+# SPINE / GF180MCU RTL bring-up (t9_sdram_btl)
+CONFIG_TRANSPUTER_SPINE_CHIP=y
+CONFIG_TRANSPUTER_RAM_MIB=128
+CONFIG_TRANSPUTER_L_THDS_BOOT=y
+# simplefb (fbdev); simpledrm needs MMU — leave DRM off
+CONFIG_FB=y
+CONFIG_FB_SIMPLE=y
+# CONFIG_DRM is not set

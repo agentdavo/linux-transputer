@@ -1748,30 +1748,64 @@ static void __init free_area_init_node(int nid)
 	unsigned long start_pfn = 0;
 	unsigned long end_pfn = 0;
 
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * contig_page_data is __refdata; TCC can leave nr_zones /
+	 * kswapd_highest_zoneidx non-zero.  Do NOT memset the whole
+	 * pgdat — a buggy/oversize memset wiped memblock and hung
+	 * get_pfn_range_for_nid (trail …j, never 'r').
+	 */
+	pgdat->nr_zones = 0;
+	pgdat->kswapd_highest_zoneidx = 0;
+	pgdat->node_present_pages = 0;
+	pgdat->node_spanned_pages = 0;
+#else
 	/* pg_data_t should be reset to zero when it's allocated */
 	WARN_ON(pgdat->nr_zones || pgdat->kswapd_highest_zoneidx);
-
+#endif
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'g'; /* before get_pfn */
+#endif
 	get_pfn_range_for_nid(nid, &start_pfn, &end_pfn);
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'r'; /* after get_pfn_range */
+	*(volatile unsigned int *)0x10000000u =
+		(unsigned int)(start_pfn == end_pfn ? 'E' : 'F');
+#endif
 
 	pgdat->node_id = nid;
 	pgdat->node_start_pfn = start_pfn;
 
 	if (start_pfn != end_pfn) {
+#ifndef CONFIG_TRANSPUTER
 		pr_info("Initmem setup node %d [mem %#018Lx-%#018Lx]\n", nid,
 			(u64)start_pfn << PAGE_SHIFT,
 			end_pfn ? ((u64)end_pfn << PAGE_SHIFT) - 1 : 0);
-
+#endif
+#ifdef CONFIG_TRANSPUTER
+		*(volatile unsigned int *)0x10000000u = (unsigned int)'t'; /* totalpages */
+#endif
 		calculate_node_totalpages(pgdat, start_pfn, end_pfn);
 	} else {
+#ifndef CONFIG_TRANSPUTER
 		pr_info("Initmem setup node %d as memoryless\n", nid);
-
+#endif
 		reset_memoryless_node_totalpages(pgdat);
 	}
 
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'k'; /* alloc_node_mem_map */
+#endif
 	alloc_node_mem_map(pgdat);
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'l'; /* free_area_init_core */
+#endif
 	pgdat_set_deferred_range(pgdat);
 
 	free_area_init_core(pgdat);
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'m'; /* node core done */
+#endif
 	lru_gen_init_pgdat(pgdat);
 }
 
@@ -1854,6 +1888,9 @@ static void __init free_area_init(void)
 	int i, nid, zone;
 	bool descending;
 
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'a'; /* arch zones */
+#endif
 	arch_zone_limits_init(max_zone_pfn);
 
 	start_pfn = PHYS_PFN(memblock_start_of_DRAM());
@@ -1876,9 +1913,21 @@ static void __init free_area_init(void)
 	}
 
 	/* Find the PFNs that ZONE_MOVABLE begins at in each node */
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * find_zone_movable_pfns_for_nodes() was hanging after sparse_init
+	 * (UART …asn then wild Iptr).  No kernelcore/movablecore cmdline;
+	 * leave all zone_movable_pfn[] zero → no ZONE_MOVABLE split.
+	 */
+	memset(zone_movable_pfn, 0, sizeof(zone_movable_pfn));
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'b'; /* skip movable calc */
+#else
 	find_zone_movable_pfns_for_nodes();
+#endif
 
-	/* Print out the zone ranges */
+#ifndef CONFIG_TRANSPUTER
+	/* Print out the zone ranges — printk this early hangs on Transputer
+	 * (no safe console; trail died at …asn with wild Iptr). */
 	pr_info("Zone ranges:\n");
 	for (i = 0; i < MAX_NR_ZONES; i++) {
 		if (i == ZONE_MOVABLE)
@@ -1902,18 +1951,27 @@ static void __init free_area_init(void)
 			pr_info("  Node %d: %#018Lx\n", i,
 			       (u64)zone_movable_pfn[i] << PAGE_SHIFT);
 	}
+#endif
 
 	/* Print out the early node map. */
+#ifndef CONFIG_TRANSPUTER
 	pr_info("Early memory node ranges\n");
 	for_each_mem_pfn_range(i, MAX_NUMNODES, &start_pfn, &end_pfn, &nid)
 		pr_info("  node %3d: [mem %#018Lx-%#018Lx]\n", nid,
 			(u64)start_pfn << PAGE_SHIFT,
 			((u64)end_pfn << PAGE_SHIFT) - 1);
+#endif
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'c'; /* after pfn ranges */
+#endif
 
 	/* Initialise every node */
 	mminit_verify_pageflags_layout();
 	setup_nr_node_ids();
 	set_pageblock_order();
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'i'; /* init nodes */
+#endif
 
 	for_each_node(nid) {
 		pg_data_t *pgdat;
@@ -1926,6 +1984,9 @@ static void __init free_area_init(void)
 			alloc_offline_node_data(nid);
 
 		pgdat = NODE_DATA(nid);
+#ifdef CONFIG_TRANSPUTER
+		*(volatile unsigned int *)0x10000000u = (unsigned int)'j'; /* free_area_init_node */
+#endif
 		free_area_init_node(nid);
 
 		/*
@@ -2697,13 +2758,33 @@ void __init mm_core_init_early(void)
 	kho_memory_init_early();
 
 	sparse_sections_init();
+#ifdef CONFIG_TRANSPUTER
+	/* raw UART — avoid printk/console this early */
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'z'; /* free_area_init */
+#endif
 	free_area_init();
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'Z'; /* free_area_init done */
+#endif
 
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'h'; /* hugetlb start */
+#endif
 	hugetlb_cma_reserve();
 	hugetlb_bootmem_alloc();
 
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'s'; /* sparse_init */
+#endif
 	sparse_init();
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'n'; /* nodes/memmap */
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'p'; /* memmap_init */
+#endif
 	memmap_init();
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'q'; /* memmap done */
+#endif
 }
 
 /*

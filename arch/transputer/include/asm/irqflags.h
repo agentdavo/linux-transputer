@@ -15,12 +15,12 @@
 
 extern unsigned long arch_local_save_flags(void);
 /*
- * WORKAROUND (2026-01-17): TCC has a bug where do { } while(0) macros
- * use the last expression's return value instead of constant 0 for the
- * while condition. For void functions, AReg is garbage after return,
- * and if it happens to be 0, the loop repeats infinitely.
- *
- * Fix: Change void functions to return non-zero value so AReg != 0.
+ * WORKAROUND (2026-01-17, updated 2026-08): TCC do { } while(0) uses the
+ * body's last expression as the while condition.  arch_* disable/enable/
+ * restore therefore return 0.  raw_local_irq_save/save_flags still end with
+ * `flags = arch_local_irq_save()` (often 1) — those macros force a trailing
+ * 0 under CONFIG_TRANSPUTER in include/linux/irqflags.h.  Without that,
+ * boot_cpu_init's first atomic bitop hangs after marker 'i'.
  */
 extern int arch_local_irq_restore(unsigned long flags);
 extern int arch_local_irq_disable(void);

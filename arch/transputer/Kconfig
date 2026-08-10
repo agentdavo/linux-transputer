@@ -70,13 +70,39 @@ menu "Kernel features"
 
 source "kernel/Kconfig.hz"
 
+config TRANSPUTER_SPINE_CHIP
+	bool "SPINE / GF180MCU chip memory map"
+	default n
+	help
+	  Use the SPINE SoC map for bring-up on the GF180MCU RTL model
+	  (t9_sdram_btl, 128 MiB SDRAM, PPU FB carve at 0x81000000).
+	  Leave disabled for T4 TransputerOS (32 MiB, FBWM at 0x81e00000).
+
+	  UART remains at 0x10000000 (matches SPINE D0 uart0 and T4).
+	  simplefb still uses platform_device "simple-framebuffer" (fbdev).
+	  DRM simpledrm is not selected here: it depends on MMU in upstream
+	  Kconfig; NOMMU uses CONFIG_FB_SIMPLE instead.
+
 config TRANSPUTER_RAM_MIB
 	int "Installed RAM (MiB)"
 	range 24 256
+	default 128 if TRANSPUTER_SPINE_CHIP
 	default 32
 	help
 	  Amount of contiguous RAM starting at 0x80000000. This must match
-	  the T4 emulator -sm address-bit setting (32 MiB is -sm 25).
+	  the T4 emulator -sm address-bit setting (32 MiB is -sm 25) or the
+	  SPINE sim aperture (128 MiB when TRANSPUTER_SPINE_CHIP).
+
+config TRANSPUTER_L_THDS_BOOT
+	bool "Install L-process THDS early (selth)"
+	default y if TRANSPUTER_SPINE_CHIP
+	default n
+	help
+	  After BSS clear / during setup_arch, install a real trap-handler
+	  data structure (THDS) via T9000 selth so IntegerOverflow / Illegal
+	  become L-traps instead of G null-THDS halt (ISM §10.1.3).
+	  Requires RTL with selth + L-trap (t9_process). Handler logs 'T'
+	  on UART and attempts tret restore. Still WIP vs full Linux signals.
 
 endmenu
 

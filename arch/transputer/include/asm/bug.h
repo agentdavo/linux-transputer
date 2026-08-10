@@ -3,39 +3,32 @@
 
 #include <linux/compiler.h>
 
+/* UART: !BUG + 4 hex __LINE__ digits.  Halt via stopp (0x21F5), not
+ * for(;;) — TCC has miscompiled empty infinite loops into fall-through. */
 #define BUG() do { \
-    const char *__transputer_bug_file = __FILE__; \
-    unsigned int __transputer_bug_line = __LINE__; \
-    int __transputer_bug_shift; \
+    unsigned int __bug_line = (unsigned int)__LINE__; \
+    int __bug_i; \
     *(volatile unsigned int *)0x10000000u = (unsigned int)'!'; \
     *(volatile unsigned int *)0x10000000u = (unsigned int)'B'; \
     *(volatile unsigned int *)0x10000000u = (unsigned int)'U'; \
     *(volatile unsigned int *)0x10000000u = (unsigned int)'G'; \
-    *(volatile unsigned int *)0x10000000u = (unsigned int)' '; \
-    while (*__transputer_bug_file) \
+    for (__bug_i = 12; __bug_i >= 0; __bug_i -= 4) { \
+        unsigned int __d = (__bug_line >> __bug_i) & 0xfu; \
         *(volatile unsigned int *)0x10000000u = \
-            (unsigned int)(unsigned char)*__transputer_bug_file++; \
-    *(volatile unsigned int *)0x10000000u = (unsigned int)':'; \
-    for (__transputer_bug_shift = 12; __transputer_bug_shift >= 0; \
-         __transputer_bug_shift -= 4) { \
-        unsigned int __transputer_bug_digit = \
-            (__transputer_bug_line >> __transputer_bug_shift) & 0xfu; \
-        *(volatile unsigned int *)0x10000000u = \
-            (unsigned int)(__transputer_bug_digit < 10u \
-                ? '0' + __transputer_bug_digit \
-                : 'a' + __transputer_bug_digit - 10u); \
+            (unsigned int)(__d < 10u ? '0' + __d : 'a' + __d - 10u); \
     } \
-    *(volatile unsigned int *)0x10000000u = (unsigned int)'\r'; \
-    *(volatile unsigned int *)0x10000000u = (unsigned int)'\n'; \
-    for(;;) ; \
+    __asm__ __volatile__(".byte 0x21, 0xF5"); /* stopp */ \
+    for (;;) \
+        __asm__ __volatile__(""); \
 } while (0)
 
 #define BUG_ON(condition) do { if (unlikely(condition)) BUG(); } while (0)
 
+/* Do not emit 0x00 (illegal) — that G/L-traps mid-boot under SPINE. */
 #define WARN_ON(condition) ({ \
     int __ret_warn_on = !!(condition); \
     if (unlikely(__ret_warn_on)) \
-        __asm__ __volatile__(".byte 0x00"); /* Warning marker */ \
+        *(volatile unsigned int *)0x10000000u = (unsigned int)'w'; \
     unlikely(__ret_warn_on); \
 })
 

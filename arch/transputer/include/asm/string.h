@@ -11,9 +11,9 @@
  */
 
 /*
- * clear_page_move (page.S): zero 4 KiB via MOVE doubling (~2k cycles vs
- * ~90k for a per-word stnl loop).  Critical on CHDL after zonelists when
- * free memory is bulk-zeroed.
+ * clear_page_move (clear_page.c): zero 4 KiB via word stores.
+ * (Old MOVE-doubling in page.S was T4-oriented; SPINE RTL multi-cycle MOVE
+ *  made early boot look frozen in clear_loop.)
  */
 extern void clear_page_move(void *page);
 

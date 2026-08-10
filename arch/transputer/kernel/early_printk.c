@@ -43,8 +43,22 @@ static struct console tr_early_console = {
  */
 int __init setup_early_printk(char *buf)
 {
+	/*
+	 * SPINE/CHDL: register_console() early has hung/corrupted state
+	 * (Iptr jumped to low memory after marker C).  Prefer raw UART for
+	 * early banners; full ttyS console still registers later via
+	 * transputer_console_init.  Keep register_console for T4 when
+	 * not on SPINE chip profile.
+	 */
+	uart_putc_raw('e');
+#ifdef CONFIG_TRANSPUTER_SPINE_CHIP
+	/* Direct path only — avoid printk console list walks this early */
+	(void)buf;
+	(void)tr_early_console;
+#else
 	register_console(&tr_early_console);
-
+#endif
+	uart_putc_raw('E');
 	return 0;
 }
 

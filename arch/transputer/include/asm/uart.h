@@ -13,6 +13,8 @@
 
 #include <linux/types.h>
 
+/* T4 emulator + SPINE DEVICE uart0 (A[31:28]==0x1, APB slot 0). Keep in sync
+ * with chip ip/uart + ip/bus README; no DTSI override on this arch yet. */
 #define UART_MMIO_ADDR 0x10000000u
 
 /* Inline UART write — avoids cross-file call relocation bugs in TCC linker */
