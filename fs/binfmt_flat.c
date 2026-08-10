@@ -510,6 +510,17 @@ static int load_flat_file(struct linux_binprm *bprm,
 	if (ret)
 		goto err;
 
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * Phase 10: drop prior soft-mm PRIV/ACTIVE so put_user into the new
+	 * image is not rejected as outside the old process private span.
+	 */
+	{
+		extern void t9k_soft_mm_reset_for_exec(void);
+		t9k_soft_mm_reset_for_exec();
+	}
+#endif
+
 	/* OK, This is the point of no return */
 	set_personality(PER_LINUX_32BIT);
 	setup_new_exec(bprm);
@@ -879,9 +890,9 @@ static int load_flat_binary(struct linux_binprm *bprm)
 #ifdef CONFIG_TRANSPUTER
 	/*
 	 * Extra private pages below the entry WPtr so Phase 9 Q3 stack
-	 * windows can size-align without aliasing foreign phys (hard P).
+	 * windows can size-align above the bFLT image (no text dual-map).
 	 */
-	stack_len += 128 * 1024;
+	stack_len += 256 * 1024;
 #endif
 
 	res = load_flat_file(bprm, &libinfo, &stack_len);
@@ -923,13 +934,16 @@ static int load_flat_binary(struct linux_binprm *bprm)
 	if (res)
 		return res;
 
+#ifdef CONFIG_TRANSPUTER
 	/*
-	 * Phase 9: transputer_flat_q3_publish() (arch/.../flat_q3.c) can move
-	 * WPtr into Q3 with RODS relocate.  It is not called by default —
-	 * under hard P, init dies after getpid (IPtr=0) even with a safe
-	 * phys window.  Keep the helper + 128KiB stack pad for bring-up.
-	 * Call publish here when that path is fixed.
+	 * Phase 9: move WPtr into Q3 (RODS relocate).  T4 keeps Q3 relocate
+	 * after soft leave_p so C-call syscalls on a Q3 workspace stay valid.
 	 */
+	{
+		extern int transputer_flat_q3_publish(void);
+		transputer_flat_q3_publish();
+	}
+#endif
 
 	/* Fake some return addresses to ensure the call chain will
 	 * initialise library in order for us.  We are required to call
