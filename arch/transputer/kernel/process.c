@@ -152,6 +152,9 @@ extern void __transputer_context_switch(struct thread_struct *prev_thread,
 extern void __transputer_start_thread(struct thread_struct *prev_thread,
 				      struct thread_struct *next_thread);
 
+/* Phase 10: rebind T9000 RODS to next task's soft-mm (hard P concurrent). */
+void t9k_install_task_rods(struct task_struct *t);
+
 struct task_struct *__switch_to(struct task_struct *prev,
 				struct task_struct *next)
 {
@@ -161,6 +164,9 @@ struct task_struct *__switch_to(struct task_struct *prev,
 	 * After GAJW we're on next's stack, so current_thread_info()
 	 * must return next's thread_info. */
 	__current_thread_info = task_thread_info(next);
+
+	/* Install next task's region map before it resumes user/P code. */
+	t9k_install_task_rods(next);
 
 	/*
 	 * switch_to(prev, next, last) must return the task which most recently

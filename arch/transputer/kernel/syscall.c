@@ -32,6 +32,7 @@
 #include <linux/sched/mm.h>
 #include <linux/timekeeping.h>
 #include <asm/uart.h>
+#include <asm/t9000_softprot.h>
 
 extern int kernel_execve(const char *filename,
 			 const char *const argv[],
@@ -370,6 +371,13 @@ extern void t9k_enter_userspace(unsigned long entry, unsigned long wptr);
  * userspace binary can find it at a fixed address.
  */
 #define TP_SYSCALL_GATE_ADDR 0x80000060UL
+/* Phase 10 trap ABI slots below MemStart/_start (NOMMU fixed window). */
+#define TP_HARD_P_FLAG_ADDR  0x80000064UL
+#define TP_SYSCALL_RET_ADDR  0x80000068UL
+#define TP_SYSCALL_ARGS_PTR  0x8000006CUL	/* -> 7×u32 arg staging in kernel BSS */
+
+/* Staging lives in kernel data so it does not overlap _start @ 0x80000070. */
+static unsigned int tp_trap_arg_stage[8];
 
 typedef long (*tp_syscall_fn_t)(long, long, long, long, long, long, long);
 
@@ -377,6 +385,11 @@ void tp_publish_syscall_gate(void)
 {
 	*(volatile tp_syscall_fn_t *)TP_SYSCALL_GATE_ADDR =
 		(tp_syscall_fn_t)__transputer_syscall;
+	*(volatile unsigned long *)TP_HARD_P_FLAG_ADDR =
+		t9k_hard_p_enabled() ? 1UL : 0UL;
+	*(volatile unsigned long *)TP_SYSCALL_RET_ADDR = 0;
+	*(volatile unsigned long *)TP_SYSCALL_ARGS_PTR =
+		(unsigned long)(unsigned long *)&tp_trap_arg_stage[0];
 }
 
 long __transputer_getpid0(void)

@@ -317,26 +317,21 @@ int t9k_soft_setup_user_quarter(struct t9k_soft_mm *mm, u32 load_addr,
 }
 EXPORT_SYMBOL(t9k_soft_setup_user_quarter);
 
-/* Phase 9 notes kept outside soft_mm so setup memset cannot clobber them. */
-static u32 t9k_split_data_phys;
-static u32 t9k_split_data_la;
-static u32 t9k_split_data_len;
-
 /*
  * binfmt_flat records a multi-quarter load (data phys in Q2, LA in Q3).
+ * Notes live in per-task soft_mm (Phase 10 — no process-global static race).
  * Do NOT set ACTIVE here — reloc/GOT still touch Q2 phys via put_user.
  */
 void t9k_note_split_load(u32 data_phys, u32 data_la, u32 data_map_len)
 {
 	struct t9k_soft_mm *mm = t9k_task_soft_mm(current);
 
-	if (!data_phys || !data_la || !data_map_len)
+	if (!mm || !data_phys || !data_la || !data_map_len)
 		return;
-	t9k_split_data_phys = data_phys;
-	t9k_split_data_la = data_la;
-	t9k_split_data_len = data_map_len;
-	if (mm)
-		mm->flags |= T9K_SOFT_FL_SPLIT;
+	mm->split_phys = data_phys;
+	mm->split_la = data_la;
+	mm->split_len = data_map_len;
+	mm->flags |= T9K_SOFT_FL_SPLIT;
 }
 EXPORT_SYMBOL(t9k_note_split_load);
 
@@ -347,16 +342,24 @@ void t9k_soft_mm_clear(struct task_struct *t)
 
 	if (mm)
 		memset(mm, 0, sizeof(*mm));
-	/* Split notes are process-scoped; drop on teardown. */
-	if (!t || t == current) {
-		t9k_split_data_phys = 0;
-		t9k_split_data_la = 0;
-		t9k_split_data_len = 0;
-	}
 	/* T4 leave_p MMIO — safe no-op if not on T4 */
 	*(volatile unsigned int *)0xA000001Cu = 0;
 }
 EXPORT_SYMBOL(t9k_soft_mm_clear);
+
+/*
+ * Phase 10: exec load path does put_user into the new image.  Old PRIV maps
+ * would reject those addresses (EFAULT on binfmt read).  Clear without
+ * leave_p — caller may still be in a parent P session.
+ */
+void t9k_soft_mm_reset_for_exec(void)
+{
+	struct t9k_soft_mm *mm = t9k_task_soft_mm(current);
+
+	if (mm)
+		memset(mm, 0, sizeof(*mm));
+}
+EXPORT_SYMBOL(t9k_soft_mm_reset_for_exec);
 
 void t9k_soft_fill_rods(const struct t9k_soft_mm *mm, u32 *rods)
 {
@@ -364,16 +367,73 @@ void t9k_soft_fill_rods(const struct t9k_soft_mm *mm, u32 *rods)
 	if (!rods)
 		return;
 	for (i = 0; i < 4; i++) {
-		if (mm && mm->reg[i].valid)
-			rods[i] = make_desc(mm->reg[i].phys_base,
-					    mm->reg[i].size,
-					    mm->reg[i].write,
-					    mm->reg[i].exec);
-		else
+		u32 sz, d;
+
+		if (!mm || !mm->reg[i].valid) {
 			rods[i] = T9K_NULL_REGION;
+			continue;
+		}
+		sz = mm->reg[i].size;
+		/* Reject nonsense sizes (TCC/layout glitches have produced ~0). */
+		if (sz < 256u || sz > (1u << 30)) {
+			rods[i] = T9K_NULL_REGION;
+			continue;
+		}
+		d = make_desc(mm->reg[i].phys_base, sz,
+			      mm->reg[i].write, mm->reg[i].exec);
+		if (d == 0u || d == 0xffffffffu)
+			d = T9K_NULL_REGION;
+		rods[i] = d;
 	}
+	/*
+	 * Q2: always pin full-quarter RWX (text+FB+VGA).  make_desc(1<<30)
+	 * has been flaky under TCC (seen as 0xffffffff in UART logs);
+	 * 0xA0000003 is the known-good ISM encoding for Q2 1GiB W|X.
+	 */
+	rods[2] = 0xa0000003u;
 }
 EXPORT_SYMBOL(t9k_soft_fill_rods);
+
+/*
+ * Phase 10: push this task's cached RODS + PMI private/text into T4
+ * without changing IPtr/WPtr.  Used on context switch.
+ */
+#define T9K_LOAD_RODS_MMIO	0xA0000020u
+#define T9K_LOAD_RODS_SLOT	0xA0000024u	/* +0..12 = four RODS words */
+#define T9K_PMI_PRIV_LO		0xA0000034u
+#define T9K_PMI_PRIV_HI		0xA0000038u
+#define T9K_PMI_TEXT_LO		0xA000003Cu
+#define T9K_PMI_TEXT_HI		0xA0000040u
+#define T9K_PMI_COMMIT		0xA0000044u
+
+void t9k_install_task_rods(struct task_struct *t)
+{
+	struct t9k_soft_mm *mm = t9k_task_soft_mm(t);
+	int i;
+
+	if (!mm || !(mm->flags & T9K_SOFT_FL_ACTIVE))
+		return;
+	if (!mm->rods_cache[0] && !mm->rods_cache[2] && !mm->rods_cache[3])
+		t9k_soft_fill_rods(mm, mm->rods_cache);
+
+	for (i = 0; i < 4; i++)
+		*(volatile u32 *)(T9K_LOAD_RODS_SLOT + (u32)(4 * i)) =
+			mm->rods_cache[i];
+	*(volatile u32 *)T9K_LOAD_RODS_MMIO = 1;
+
+	/* PMI per-process private + text-as-ROM under P */
+	if (mm->flags & T9K_SOFT_FL_PRIV) {
+		*(volatile u32 *)T9K_PMI_PRIV_LO = mm->priv_lo;
+		*(volatile u32 *)T9K_PMI_PRIV_HI = mm->priv_hi;
+	} else {
+		*(volatile u32 *)T9K_PMI_PRIV_LO = 0;
+		*(volatile u32 *)T9K_PMI_PRIV_HI = 0;
+	}
+	*(volatile u32 *)T9K_PMI_TEXT_LO = mm->text_lo;
+	*(volatile u32 *)T9K_PMI_TEXT_HI = mm->text_hi;
+	*(volatile u32 *)T9K_PMI_COMMIT = 1;
+}
+EXPORT_SYMBOL(t9k_install_task_rods);
 
 static void fill_pds(u32 *pds, u32 entry, u32 wsp)
 {
@@ -400,6 +460,11 @@ int t9k_enter_user_p(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 	pds = soft_pds_buf;
 	rods = soft_rods_buf;
 	t9k_soft_fill_rods(mm, rods);
+	{
+		int i;
+		for (i = 0; i < 4; i++)
+			mm->rods_cache[i] = rods[i];
+	}
 	fill_pds(pds, entry, wsp);
 	mm->pds_phys = (u32)(unsigned long)pds;
 
@@ -445,6 +510,11 @@ int t9k_run_user_until_exit(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 	pds = soft_pds_buf;
 	rods = soft_rods_buf;
 	t9k_soft_fill_rods(mm, rods);
+	{
+		int i;
+		for (i = 0; i < 4; i++)
+			mm->rods_cache[i] = rods[i];
+	}
 	fill_pds(pds, entry, wsp);
 	pds[0] = 0; /* CNTL */
 	mm->pds_phys = (u32)(unsigned long)pds;
@@ -458,43 +528,49 @@ int t9k_run_user_until_exit(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 		if (cause == 0)
 			return 0; /* soft no-op — fall back to L enter */
 		if (cause == T9K_TRAP_SYSCALL) {
-			long nr = (long)pds[T9K_PS_SAREG];
-			long a1 = (long)pds[T9K_PS_SBREG];
-			long a2 = (long)pds[T9K_PS_SCREG];
-			long a3 = 0, a4 = 0, a5 = 0, a6 = 0;
+			long nr = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0;
 			long ret;
 			u32 wsp = pds[T9K_PS_SWPTR];
-
+			u32 wsp_phys = wsp;
 			/*
-			 * Trap ABI (TP_USE_T9K_SYSCALL / pure asm):
-			 *   A = nr, B = a1, C = a2
-			 *   User WPtr words 1..4 = a3..a6 (optional)
-			 *
-			 * C-call gate apps never take this path while they
-			 * CALL the gate under P without the syscall insn.
-			 *
-			 * If A does not look like a syscall number, recover
-			 * full frame from WPtr[1..7] (TCC-style CALL frame).
+			 * Phase 10: userspace stages args via pointer at
+			 * 0x8000006C → kernel BSS array (avoids _start overlap).
 			 */
-			if (nr <= 0 || nr > 4096) {
-				if (wsp) {
-					nr = *(long *)(unsigned long)(wsp + 4);
-					a1 = *(long *)(unsigned long)(wsp + 8);
-					a2 = *(long *)(unsigned long)(wsp + 12);
-					a3 = *(long *)(unsigned long)(wsp + 16);
-					a4 = *(long *)(unsigned long)(wsp + 20);
-					a5 = *(long *)(unsigned long)(wsp + 24);
-					a6 = *(long *)(unsigned long)(wsp + 28);
+			{
+				u32 *stage = *(u32 *volatile *)0x8000006Cu;
+
+				if (stage) {
+					nr = (long)stage[0];
+					a1 = (long)stage[1];
+					a2 = (long)stage[2];
+					a3 = (long)stage[3];
+					a4 = (long)stage[4];
+					a5 = (long)stage[5];
+					a6 = (long)stage[6];
 				}
-			} else if (wsp) {
-				a3 = *(long *)(unsigned long)(wsp + 4);
-				a4 = *(long *)(unsigned long)(wsp + 8);
-				a5 = *(long *)(unsigned long)(wsp + 12);
-				a6 = *(long *)(unsigned long)(wsp + 16);
+			}
+
+			if (nr <= 0 || nr > 4096) {
+				nr = (long)pds[T9K_PS_SAREG];
+				a1 = (long)pds[T9K_PS_SBREG];
+				a2 = (long)pds[T9K_PS_SCREG];
+				if (wsp && (mm->flags & T9K_SOFT_FL_SPLIT))
+					wsp_phys = t9k_la_to_phys(mm, wsp);
+				if ((nr <= 0 || nr > 4096) && wsp_phys) {
+					nr = *(long *)(unsigned long)(wsp_phys + 4);
+					a1 = *(long *)(unsigned long)(wsp_phys + 8);
+					a2 = *(long *)(unsigned long)(wsp_phys + 12);
+					a3 = *(long *)(unsigned long)(wsp_phys + 16);
+					a4 = *(long *)(unsigned long)(wsp_phys + 20);
+					a5 = *(long *)(unsigned long)(wsp_phys + 24);
+					a6 = *(long *)(unsigned long)(wsp_phys + 28);
+				}
 			}
 
 			ret = __transputer_syscall(nr, a1, a2, a3, a4, a5, a6);
 			pds[T9K_PS_SAREG] = (u32)ret;
+			/* Userspace trap stub reads fixed return slot after re-goprot. */
+			*(volatile u32 *)0x80000068u = (u32)ret;
 			pds[T9K_PS_CNTL] = 0; /* clear for next re-enter */
 			if (++restarts > 100000)
 				return -EAGAIN;
@@ -525,6 +601,9 @@ void t9k_enter_userspace(unsigned long entry, unsigned long wptr)
 			pr_info("t9000_prot: P-enter #%lu entry=%08lx wsp=%08lx\n",
 				p_enters, entry, wptr);
 
+		/* Bind RODS + PMI private/text before first goprot. */
+		t9k_install_task_rods(current);
+
 		cause = t9k_run_user_until_exit(mm, (u32)entry, (u32)wptr);
 		if (cause == 0) {
 			/* T4_PROTECT off or goprot soft — classic enter */
@@ -552,14 +631,19 @@ void t9k_on_exec_finish(struct pt_regs *regs)
 {
 	struct t9k_soft_mm *mm = t9k_task_soft_mm(current);
 	struct mm_struct *m = current->mm;
-	u32 load, stack_base, stack_top;
-	u32 rods[4];
+	u32 load, stack_base, stack_top, stack_phys;
+	u32 split_phys, split_la, split_len;
 	u32 saved_flags_split;
+	u32 priv_lo, priv_hi, text_lo, text_hi;
 
 	if (!m || !regs || !mm)
 		return;
 
+	/* Preserve split notes across setup_user_quarter memset. */
 	saved_flags_split = mm->flags & T9K_SOFT_FL_SPLIT;
+	split_phys = mm->split_phys;
+	split_la = mm->split_la;
+	split_len = mm->split_len;
 
 	load = (u32)m->start_code;
 	if (!load)
@@ -570,29 +654,48 @@ void t9k_on_exec_finish(struct pt_regs *regs)
 	stack_base = (stack_top > 0x1000) ? (stack_top - 0x1000) : stack_top;
 
 	/*
-	 * Sized Q2 window (FB+VGA+text).  Q0 stays unmapped → NULL / low
-	 * pointers fail access_ok under enforce.
+	 * Range calc must use phys stack so Q3 LA does not pull Q2 lo/hi
+	 * into the upper half of the address space.
 	 */
-	if (t9k_soft_setup_user_quarter(mm, load, stack_base))
-		return;
-
-	if (saved_flags_split)
-		mm->flags |= T9K_SOFT_FL_SPLIT;
+	stack_phys = stack_base;
+	if (((stack_base >> 30) & 3u) == 3u && split_phys && split_la &&
+	    split_len && stack_base >= split_la &&
+	    stack_base < split_la + split_len)
+		stack_phys = split_phys + (stack_base - split_la);
+	else if (((stack_base >> 30) & 3u) == 3u)
+		stack_phys = stack_base - 0x40000000u; /* full Q2 mirror */
 
 	/*
-	 * Phase 9 multi-quarter: data LA in Q3, phys in Q2.
-	 * Map Q3 RW no-X via relocate.  Keep Q2 writable so FB/SHM/VGA
-	 * (same quarter as text) still work under P.
+	 * Sized Q2 window (FB+VGA+text).  Use phys stack for span.
+	 * Q0 devices mapped for hard-P UART.
 	 */
-	if ((mm->flags & T9K_SOFT_FL_SPLIT) && t9k_split_data_phys &&
-	    t9k_split_data_la) {
-		unsigned qd = (t9k_split_data_la >> 30) & 3u;
-		unsigned qt = (load >> 30) & 3u;
+	if (t9k_soft_setup_user_quarter(mm, load, stack_phys))
+		return;
 
-		soft_map_remap(mm, qd, t9k_split_data_la, t9k_split_data_phys,
-			       t9k_split_data_len, 1, 0);
-		if (qt != qd && mm->reg[qt].valid)
-			mm->reg[qt].exec = 1;
+	/* Restore split notes after memset inside setup. */
+	if (saved_flags_split) {
+		mm->flags |= T9K_SOFT_FL_SPLIT;
+		mm->split_phys = split_phys;
+		mm->split_la = split_la;
+		mm->split_len = split_len;
+	}
+
+	/*
+	 * Q2: full-quarter identity RWX — FB/VGA/text share Q2 (one region
+	 * per LA quarter).  Soft PRIV/RX enforce process isolation on
+	 * uaccess; HW RODS stay wide for graphics under P.
+	 */
+	soft_map_quarter(mm, 2, 1, 1);
+
+	/*
+	 * Phase 9 multi-quarter: stack LA in Q3, phys in Q2.
+	 * Map Q3 RW no-X via relocate.
+	 */
+	if ((mm->flags & T9K_SOFT_FL_SPLIT) && mm->split_phys && mm->split_la) {
+		unsigned qd = (mm->split_la >> 30) & 3u;
+
+		soft_map_remap(mm, qd, mm->split_la, mm->split_phys,
+			       mm->split_len, 1, 0);
 	} else if (m->start_data && m->start_code) {
 		unsigned qt = ((u32)m->start_code >> 30) & 3u;
 		unsigned qd = ((u32)m->start_data >> 30) & 3u;
@@ -604,21 +707,71 @@ void t9k_on_exec_finish(struct pt_regs *regs)
 			mm->reg[qt].exec = 1;
 	}
 
+	/* Phase 10: soft RX text + private phys span for concurrent soft isol.
+	 * Use end_code (not start_data) — RAM bFLT may keep GOT/data after
+	 * text but start_data can sit far into writable space on busybox.
+	 */
+	text_lo = (u32)m->start_code;
+	text_hi = (u32)m->end_code;
+	if (text_hi <= text_lo)
+		text_hi = (u32)m->start_data;
+	if (text_hi <= text_lo)
+		text_hi = text_lo + 0x1000u;
+	mm->text_lo = text_lo;
+	mm->text_hi = text_hi;
+
+	priv_lo = load & ~0xfffu;
+	if (m->start_brk && (u32)m->start_brk > priv_lo)
+		priv_hi = (u32)m->start_brk + 0x40000u; /* brk + pad */
+	else
+		priv_hi = load + 0x40000u;
+	/*
+	 * Stack top (regs->wptr) must be inside [priv_lo, priv_hi).
+	 * stack_phys above is near-top (top-0x1000); use real top + headroom.
+	 */
+	{
+		u32 stack_top_phys = stack_top;
+
+		if (((stack_top >> 30) & 3u) == 3u && split_phys && split_la &&
+		    split_len && stack_top >= split_la &&
+		    stack_top < split_la + split_len)
+			stack_top_phys = split_phys + (stack_top - split_la);
+		else if (((stack_top >> 30) & 3u) == 3u)
+			stack_top_phys = stack_top - 0x40000000u;
+		if (stack_top_phys + 0x20u > priv_hi)
+			priv_hi = stack_top_phys + 0x20u;
+		if (stack_top_phys < priv_lo)
+			priv_lo = stack_top_phys & ~0xfffu;
+		/* Cover 256 KiB stack pad below entry WPtr when present. */
+		if (stack_top_phys > 0x40000u &&
+		    stack_top_phys - 0x40000u < priv_lo)
+			priv_lo = (stack_top_phys - 0x40000u) & ~0xfffu;
+	}
+	mm->priv_lo = priv_lo;
+	mm->priv_hi = priv_hi;
+	mm->flags |= T9K_SOFT_FL_PRIV;
+
 	/* Hard-P requires ACTIVE maps for goprot RODS. */
 	if (!t9k_soft_enforce && !t9k_hard_p)
 		mm->flags &= ~T9K_SOFT_FL_ACTIVE;
 	else
 		mm->flags |= T9K_SOFT_FL_ACTIVE | T9K_SOFT_FL_SYSCALL;
 
-	/* Cache RODS words for hard-path / debug. */
-	t9k_soft_fill_rods(mm, rods);
+	/* Cache RODS words for hard-path / scheduler re-install. */
+	t9k_soft_fill_rods(mm, mm->rods_cache);
 	mm->pds_phys = 0;
+
+	/* Keep userspace hard_p flag in sync (publish may run before parse). */
+	*(volatile u32 *)0x80000064u = t9k_hard_p ? 1u : 0u;
 
 	pr_info_once("t9000_prot: soft-mm per-task load=%08x stack=%08x "
 		     "enforce=%d hard_p=%d flags=%x "
+		     "text=%08x..%08x priv=%08x..%08x "
 		     "rods=%08x/%08x/%08x/%08x\n",
 		     load, stack_base, t9k_soft_enforce, t9k_hard_p, mm->flags,
-		     rods[0], rods[1], rods[2], rods[3]);
+		     mm->text_lo, mm->text_hi, mm->priv_lo, mm->priv_hi,
+		     mm->rods_cache[0], mm->rods_cache[1],
+		     mm->rods_cache[2], mm->rods_cache[3]);
 }
 
 /* ------------------------------------------------------------------

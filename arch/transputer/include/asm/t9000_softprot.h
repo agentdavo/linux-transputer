@@ -1,14 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Soft protection contract for Transputer Linux (Phases 2–9).
+ * Soft protection contract for Transputer Linux (Phases 2–10).
  *
  * Hardware: T9000 L/P + 4 regions (see transputer/T9000-PROTECTION.md).
- * Until goprot/syscall are used for every user task, this header documents
- * the software shadow of that model so uaccess and spawn can grow into it.
  *
- * Phase 9: text stays identity in Q2; data/stack may be remapped to Q3 LA
- * with phys_base still in Q2 RAM (T9000 region relocate).  soft_ok checks
- * LA windows; uaccess translates LA→phys when remapped.
+ * Phase 9: stack may live in Q3 LA with phys still in Q2 (region relocate).
+ * Phase 10: per-task split notes; soft RX text; soft private-range isolation
+ * for concurrent P (uaccess); scheduler can re-install RODS.
  */
 #ifndef _ASM_TRANSPUTER_T9000_SOFTPROT_H
 #define _ASM_TRANSPUTER_T9000_SOFTPROT_H
@@ -41,14 +39,38 @@ struct t9k_soft_mm {
 	struct t9k_soft_region	reg[T9K_SOFT_NREGIONS];
 	u32			pds_phys;	/* guest PDS if using T4 goprot */
 	u32			flags;
+	/* Phase 9/10: multi-quarter split (per-task — not process-global static). */
+	u32			split_phys;
+	u32			split_la;
+	u32			split_len;
+	/* Phase 10: soft RX text [text_lo, text_hi) — reject user writes. */
+	u32			text_lo;
+	u32			text_hi;
+	/*
+	 * Phase 10: process-private phys span (image+stack pad).  Soft uaccess
+	 * outside private∪shared (FB/VGA/SHM) is rejected so concurrent tasks
+	 * cannot poke each other's private RAM via copy_*_user even when HW
+	 * Q2 RODS remains a wide window (one region/quarter limit).
+	 */
+	u32			priv_lo;
+	u32			priv_hi;
+	/* Cached RODS for scheduler re-install without rebuild. */
+	u32			rods_cache[4];
 };
 
 #define T9K_SOFT_FL_ACTIVE	0x1	/* task runs as P-process */
 #define T9K_SOFT_FL_SYSCALL	0x2	/* prefer trap syscall path */
 #define T9K_SOFT_FL_SPLIT	0x4	/* data remapped to another quarter */
+#define T9K_SOFT_FL_PRIV	0x8	/* priv_lo/hi valid for soft isolation */
 
 /* Q3 base for user data/stack when multi-quarter bFLT is active. */
 #define T9K_USER_DATA_QBASE	0xC0000000u
+
+/* Shared surfaces every P-process may touch (phys / identity LA in Q2). */
+#define T9K_SHARED_SCRATCH_LO	0x81a00000u
+#define T9K_SHARED_SCRATCH_HI	0x82000000u	/* scratch+compose+fb carveouts */
+#define T9K_SHARED_VGA_LO	0xA0000000u
+#define T9K_SHARED_VGA_HI	0xA0001000u
 
 struct pt_regs;
 struct task_struct;
@@ -66,12 +88,25 @@ int t9k_soft_setup_user_quarter(struct t9k_soft_mm *mm, u32 load_addr,
 /* Phase 9: record split load before on_exec_finish (from binfmt_flat). */
 void t9k_note_split_load(u32 data_phys, u32 data_la, u32 data_map_len);
 void t9k_soft_fill_rods(const struct t9k_soft_mm *mm, u32 *rods);
+/* Phase 10: install this task's RODS into the emulator (no IPtr change). */
+void t9k_install_task_rods(struct task_struct *t);
 int t9k_enter_user_p(struct t9k_soft_mm *mm, u32 entry, u32 wsp);
 int t9k_run_user_until_exit(struct t9k_soft_mm *mm, u32 entry, u32 wsp);
 /* Phase 7: goprot enter when hard_p, else classic L enter_exec. */
 void t9k_enter_userspace(unsigned long entry, unsigned long wptr);
 void t9k_on_exec_finish(struct pt_regs *regs);
 void t9k_soft_mm_clear(struct task_struct *t);
+/* Drop ACTIVE/PRIV so bFLT load put_user is not blocked by prior maps. */
+void t9k_soft_mm_reset_for_exec(void);
+
+static inline int t9k_shared_surface(u32 la, u32 end)
+{
+	if (la >= T9K_SHARED_SCRATCH_LO && end < T9K_SHARED_SCRATCH_HI)
+		return 1;
+	if (la >= T9K_SHARED_VGA_LO && end < T9K_SHARED_VGA_HI)
+		return 1;
+	return 0;
+}
 
 /* Access checks used by copy_*_user when ACTIVE. */
 static inline int t9k_soft_ok(const struct t9k_soft_mm *mm, u32 la,
@@ -80,6 +115,7 @@ static inline int t9k_soft_ok(const struct t9k_soft_mm *mm, u32 la,
 	unsigned q;
 	const struct t9k_soft_region *r;
 	u32 end, base, lim;
+	u32 phys;
 
 	/* Fast path: track-only / no mm → identity (NOMMU compat). */
 	if (!mm || !(mm->flags & T9K_SOFT_FL_ACTIVE))
@@ -104,6 +140,32 @@ static inline int t9k_soft_ok(const struct t9k_soft_mm *mm, u32 la,
 	lim = base + r->size;
 	if (la < base || end >= lim)
 		return 0;
+
+	/* Phase 10 soft RX: reject writes into text [text_lo, text_hi). */
+	if (write && mm->text_hi > mm->text_lo) {
+		phys = la;
+		if (r->phys_base != base && la >= base && la < lim)
+			phys = r->phys_base + (la - base);
+		if (phys >= mm->text_lo && phys < mm->text_hi)
+			return 0;
+	}
+
+	/*
+	 * Phase 10 soft private isolation (Q2/Q3 user RAM only).
+	 * Devices (Q0) and shared FB/VGA always pass once region-valid.
+	 */
+	if ((mm->flags & T9K_SOFT_FL_PRIV) && mm->priv_hi > mm->priv_lo &&
+	    q != 0u) {
+		phys = la;
+		if (r->phys_base != base && la >= base && la < lim)
+			phys = r->phys_base + (la - base);
+		if (!t9k_shared_surface(phys, phys + (u32)len - 1) &&
+		    !t9k_shared_surface(la, end)) {
+			if (phys < mm->priv_lo ||
+			    phys + (u32)len - 1 >= mm->priv_hi)
+				return 0;
+		}
+	}
 	return 1;
 }
 
