@@ -25,14 +25,15 @@
 #include <asm/processor.h>
 #include <asm/segment.h>
 #include <asm/thread_info.h>
+#include <asm/timex.h>
 
 /*
  * arch_cpu_idle — called from the idle loop.
- * On transputer, there's nothing to do (no WFI instruction).
+ * No WFI; poll LDTIMER so jiffies advance while the idle task runs.
  */
 void arch_cpu_idle(void)
 {
-	/* barrier() could go here but is not needed for UP */
+	transputer_poll_tick();
 }
 
 /*

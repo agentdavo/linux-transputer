@@ -18,10 +18,13 @@
 #include <linux/profile.h>
 #include <linux/time.h>
 #include <linux/timekeeping.h>
+#include <linux/jiffies.h>
 
 #include <asm/irq.h>
 #include <asm/io.h>
 #include <asm/timex.h>
+#include <asm/irqflags.h>
+#include <asm/uart.h>
 
 /* Default CPU frequency (T800 @ 20MHz) — overridden by LDDEVID detection */
 static unsigned long transputer_cpu_freq = 20000000UL;
@@ -55,6 +58,10 @@ static void __init detect_cpu_frequency(void)
 		transputer_cpu_freq = 200000000UL;
 		printk(KERN_INFO "  CPU: T806 @ 200MHz (LDDEVID=0x%03x)\n", devid);
 		break;
+	case 0x9000: /* SPINE T9 core (gf180mcu ip/cpu RTL, lddevid stub id) */
+		transputer_cpu_freq = 80000000UL; /* GF180 target clock */
+		printk(KERN_INFO "  CPU: T9 SPINE @ 80MHz (LDDEVID=0x%x)\n", devid);
+		break;
 	default:
 		transputer_cpu_freq = 20000000UL;
 		printk(KERN_INFO "  CPU: Unknown (LDDEVID=0x%03x), assuming 20MHz\n", devid);
@@ -64,7 +71,7 @@ static void __init detect_cpu_frequency(void)
 
 static int transputer_clockevent_set_state(struct clock_event_device *evt)
 {
-	/* The T4 platform supplies a fixed HZ-periodic interrupt. */
+	/* Periodic mode is driven by transputer_poll_tick() from LDTIMER. */
 	return 0;
 }
 
@@ -80,13 +87,92 @@ static struct clock_event_device transputer_clockevent = {
 /*
  * Timer interrupt handler
  *
- * Called at HZ frequency to update jiffies and run timer callbacks.
+ * Kept for request_irq bookkeeping.  Delivery is cooperative: ISM §8.5
+ * has ClockReg + tin, not a vectored host IRQ, and do_IRQ is never
+ * entered from RTL.  transputer_poll_tick() drives the clockevent.
  */
 static irqreturn_t transputer_timer_interrupt(int irq, void *dev_id)
 {
-	transputer_clockevent.event_handler(&transputer_clockevent);
+	if (transputer_clockevent.event_handler)
+		transputer_clockevent.event_handler(&transputer_clockevent);
 
 	return IRQ_HANDLED;
+}
+
+/* Low-pri ClockReg1: 64 µs/tick (ISM §8.5).  Core boots Pri=1. */
+#define TICKS_PER_JIFFY	(TRANSPUTER_TIMER_FREQ / HZ)
+
+static unsigned int tick_last;
+static int tick_ready;
+static int tick_reentry;
+static unsigned int tick_fired;
+
+void transputer_poll_tick(void)
+{
+	unsigned int now, elapsed, n;
+
+	if (!tick_ready || tick_reentry)
+		return;
+	if (arch_irqs_disabled())
+		return;
+
+	now = transputer_ldtimer();
+	elapsed = now - tick_last;
+	if (elapsed < TICKS_PER_JIFFY)
+		return;
+
+	tick_reentry = 1;
+	n = 0;
+	while (elapsed >= TICKS_PER_JIFFY && n < 16) {
+		tick_last += TICKS_PER_JIFFY;
+		elapsed -= TICKS_PER_JIFFY;
+		tick_fired++;
+		if (tick_fired <= 8)
+			uart_putc_raw('T');
+		/*
+		 * Do not call legacy_timer_tick()/do_timer() from this
+		 * file: TCC's large-binary reloc bug sends those
+		 * cross-unit calls to a low Iptr (seen 0x00056xxx /
+		 * 0x000e6xxx after the first 'T').  jiffies is the
+		 * same object the rest of the kernel reads.
+		 */
+		jiffies++;
+		n++;
+	}
+	tick_reentry = 0;
+}
+
+static void __init transputer_late_time(void)
+{
+	unsigned int t0, t1;
+	unsigned long j0;
+	int spins;
+
+	uart_putc_raw('t');
+	uart_putc_raw('L');
+	tick_last = transputer_ldtimer();
+	tick_ready = 1;
+	t0 = transputer_ldtimer();
+	j0 = jiffies;
+	spins = 0;
+	while (jiffies == j0 && spins < 300000) {
+		transputer_poll_tick();
+		spins++;
+	}
+	t1 = transputer_ldtimer();
+	if (jiffies != j0) {
+		printk(KERN_INFO
+		       "Transputer: first tick jiffies=%lu ldtimer=%u->%u spins=%d\n",
+		       jiffies, t0, t1, spins);
+		uart_putc_raw('t');
+		uart_putc_raw('1');
+	} else {
+		printk(KERN_ERR
+		       "Transputer: no tick jiffies=%lu ldtimer=%u->%u spins=%d\n",
+		       jiffies, t0, t1, spins);
+		uart_putc_raw('t');
+		uart_putc_raw('0');
+	}
 }
 
 /*
@@ -117,7 +203,33 @@ void __init time_init(void)
 	clockevents_config_and_register(&transputer_clockevent, HZ, 1,
 					0xffffffffUL);
 
-	printk(KERN_INFO "Transputer: Timer IRQ registered\n");
+	tick_last = transputer_ldtimer();
+	/* tick_ready stays 0 until late_time_init — do not tick during console_init. */
+	{
+		unsigned int t0 = tick_last;
+		unsigned int t1 = t0;
+		int spins = 0;
+
+		while (t1 == t0 && spins < 200000) {
+			t1 = transputer_ldtimer();
+			spins++;
+		}
+		if (t1 == t0) {
+			printk(KERN_ERR
+			       "Transputer: LDTIMER frozen (spins=%d)\n", spins);
+			uart_putc_raw('t');
+			uart_putc_raw('!');
+		} else {
+			printk(KERN_INFO
+			       "Transputer: LDTIMER %u->%u spins=%d\n",
+			       t0, t1, spins);
+			uart_putc_raw('t');
+			uart_putc_raw('+');
+		}
+	}
+
+	late_time_init = transputer_late_time;
+	printk(KERN_INFO "Transputer: Timer IRQ registered (LDTIMER poll)\n");
 }
 
 /*

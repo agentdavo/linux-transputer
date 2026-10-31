@@ -18,6 +18,20 @@ t9k_asm_goprot:
 	/* Entry: A=ret, B=pds, C=rods → need A=pds, B=rods */
 	.byte 0xD1		/* stl 1: drop ret from A → A=pds, B=rods */
 	.byte 0x60, 0xFA	/* goprot */
+	/*
+	 * ISM resume ABI (the SPINE RTL follows the book): when the P-session
+	 * ends in a P-trap the supervisor resumes HERE with A = t.reason
+	 * (ISM Table 10.5) and B = et.type (Table 10.10).  Compose
+	 * (etype<<8)|reason into A as the C return value.  On ISM hardware
+	 * ps.Cntl holds the saved user STATUS word — the "trap cause in
+	 * PDS.cntl low 16" convention was a T4-emulator invention
+	 * (t4/t9000_protect.c); the T4 kernel build still reads the PDS and
+	 * ignores this return value, so both targets stay bootable.
+	 */
+	.byte 0xF0		/* rev:    A=etype, B=reason */
+	.byte 0x48		/* ldc 8:  A=8, B=etype, C=reason */
+	.byte 0x24, 0xF1	/* shl:    A=etype<<8, B=reason */
+	.byte 0x24, 0xFB	/* or:     A=(etype<<8)|reason */
 	.byte 0x22, 0xF0	/* ret */
 
 .global t9k_asm_syscall

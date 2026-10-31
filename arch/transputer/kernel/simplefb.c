@@ -62,6 +62,10 @@ static int __init transputer_simplefb_init(void)
 		transputer_simplefb_pdata.height,
 		transputer_simplefb_pdata.stride,
 		transputer_simplefb_pdata.format);
+	pr_info("Transputer: display reserve 0x%08lx-0x%08lx (RAM_MIB=%d)\n",
+		(unsigned long)TRANSPUTER_DISP_RESERVE_BASE,
+		(unsigned long)TRANSPUTER_DISP_RESERVE_END,
+		CONFIG_TRANSPUTER_RAM_MIB);
 #ifdef CONFIG_TRANSPUTER_SPINE_CHIP
 	pr_info("Transputer: SPINE profile — FB_SIMPLE only (simpledrm needs MMU)\n");
 #else

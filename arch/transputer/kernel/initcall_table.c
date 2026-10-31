@@ -52,9 +52,12 @@ initcall_t __initcall_end[1]       = { (initcall_t)1 };
 
 /*
  * Kernel command-line parameter table surrogates.
- * parse_early_param() and obsolete_checksetup() iterate from
- * __setup_start to __setup_end.  Define as empty so the loops
- * don't execute (no __setup() entries are critical for boot).
+ * parse_early_param() / obsolete_checksetup() walk
+ * __setup_start .. __setup_end.  TCC ignores vmlinux.lds INIT_SETUP,
+ * so these names exist for vmlinux.o/modpost; transputer-link.c
+ * rewrites them to SHN_ABS at the contiguous .init.setup image
+ * (same pattern as initcall boundaries).  Empty storage is not
+ * observed after that rewrite.  rdinit= lives in that section.
  */
 struct obs_kernel_param {
 	const char *str;

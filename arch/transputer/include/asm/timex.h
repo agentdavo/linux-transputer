@@ -27,6 +27,13 @@ typedef unsigned int cycles_t;
 extern unsigned int transputer_ldtimer(void);
 
 /*
+ * Cooperative tick: ISM §8.5 has no vectored IRQ.  ClockReg1 is free-running
+ * (ldtimer); nothing in RTL asserts a host INTC line.  Poll ClockReg and
+ * drive the clockevent when a HZ period has elapsed.
+ */
+extern void transputer_poll_tick(void);
+
+/*
  * get_cycles - Read the Transputer cycle counter
  *
  * Uses the Transputer LDTIMER instruction to read the hardware timer.

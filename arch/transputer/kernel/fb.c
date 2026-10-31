@@ -3,8 +3,9 @@
  *
  * Self-contained framebuffer console for the T4 emulator's built-in
  * VGA controller. Writes 32-bit ARGB pixels to the firmware-owned RAM
- * surface at TRANSPUTER_FB_BASE (top 2 MiB of the 32 MiB window —
- * 0x81E00000) and renders text using an embedded 8x16 VGA font.
+ * surface at TRANSPUTER_FB_BASE (T4: 0x81e00000; SPINE: 0x81000000)
+ * and renders text using an embedded 8x16 VGA font.
+ * Not linked: kernel/Makefile builds simplefb.o (CONFIG_FB_SIMPLE) only.
  *
  * T4 presents that surface via SDL (and still accepts the legacy
  * 0x90000000 alias). CHDL maps the same range as ordinary RAM after

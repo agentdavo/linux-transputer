@@ -34,6 +34,7 @@
 #include <linux/mnt_idmapping.h>
 #include <linux/pidfs.h>
 #include <linux/nstree.h>
+#include <linux/jiffies.h>
 
 #include "pnode.h"
 #include "internal.h"
@@ -6537,6 +6538,23 @@ void __init mnt_init(void)
 		const char *s = "M6\n";
 		while (*s)
 			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
+	{
+		extern void transputer_poll_tick(void);
+		unsigned long j;
+		int sh;
+		const char *s = "j=";
+
+		transputer_poll_tick();
+		j = jiffies;
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+		for (sh = 28; sh >= 0; sh -= 4) {
+			unsigned int d = ((unsigned int)j >> sh) & 0xfu;
+			*(volatile unsigned int *)0x10000000u =
+				(unsigned int)(d < 10u ? '0' + d : 'a' + d - 10u);
+		}
+		*(volatile unsigned int *)0x10000000u = '\n';
 	}
 }
 
