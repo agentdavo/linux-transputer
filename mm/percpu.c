@@ -2021,7 +2021,16 @@ static void pcpu_balance_populated(void)
 	 * something we support properly and can be highly unreliable and
 	 * inefficient.
 	 */
+#ifdef CONFIG_TRANSPUTER
+	int pop_retries = 0;
+#endif
 retry_pop:
+#ifdef CONFIG_TRANSPUTER
+	/* Unbounded retry+create livelocks on T9 if populate is a no-op
+	 * (bitmap walk / TCC).  Four empty pages is the goal; 8 tries is plenty. */
+	if (pop_retries++ > 8)
+		return;
+#endif
 	if (pcpu_atomic_alloc_failed) {
 		nr_to_pop = PCPU_EMPTY_POP_PAGES_HIGH;
 		/* best effort anyway, don't worry about synchronization */

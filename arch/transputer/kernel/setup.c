@@ -76,7 +76,7 @@ void __init setup_arch(char **cmdline_p)
 			"earlyprintk console=ttyS0 ignore_loglevel "
 			"ihash_entries=256 dhash_entries=256 thash_entries=256 "
 			"uhash_entries=256 rhash_entries=256 rdinit=/init "
-			"t9k_enforce t9k_hard_p";
+			"initramfs_async=0 t9k_enforce t9k_hard_p";
 		unsigned int i;
 
 		uart_putc_raw('1');
@@ -107,8 +107,9 @@ void __init setup_arch(char **cmdline_p)
 	 * === Memory initialization (modern NOMMU/memblock pattern) ===
 	 *
 	 * Transputer memory layout:
-	 *   T4 default: CONFIG_TRANSPUTER_RAM_MIB=32, FB @ 0x81e00000
-	 *   SPINE chip: CONFIG_TRANSPUTER_SPINE_CHIP, RAM 128, FB @ 0x81000000
+	 *   T4: RAM_MIB=32, reserve 0x81a00000..0x82000000, FB @ 0x81e00000
+	 *   SPINE_CHIP: FB @ 0x81000000 (chip PPU), reserve +16..+22 MiB
+	 *   RAM_MIB=32 is enough for both — do not raise to 128 for FB.
 	 *   0x80000000  MemStart (MinInt)
 	 *   0x80000070  _stext (kernel code start, ELF entry)
 	 *   ...         free memory to memory_end
@@ -184,16 +185,14 @@ void __init setup_arch(char **cmdline_p)
 	}
 	uart_putc_raw('1'); /* after memory region install */
 	/*
-	 * FB / compose / scratch carveouts — install reserved regions by hand
-	 * (same TCC/memblock_add_range hang as memory).  Adjacent 2MiB blocks
-	 * at 0x81000000.. merge into one reserved range.
+	 * FB / compose / scratch — one reserved box (asm/simplefb.h).
+	 * T4 order is scratch < FB, so "FB_BASE .. SCRATCH_END" is empty.
 	 */
 	{
 		extern struct memblock memblock;
 		struct memblock_region *r = &memblock.reserved.regions[0];
-		phys_addr_t rbase = (phys_addr_t)TRANSPUTER_FB_BASE;
-		phys_addr_t rend = (phys_addr_t)(TRANSPUTER_SCRATCH_BASE +
-						 TRANSPUTER_SCRATCH_SIZE);
+		phys_addr_t rbase = (phys_addr_t)TRANSPUTER_DISP_RESERVE_BASE;
+		phys_addr_t rend = (phys_addr_t)TRANSPUTER_DISP_RESERVE_END;
 		phys_addr_t rsz;
 
 		if (rbase < (phys_addr_t)memory_start)
@@ -207,7 +206,8 @@ void __init setup_arch(char **cmdline_p)
 			r->flags = 0;
 			memblock.reserved.cnt = 1;
 			memblock.reserved.total_size = rsz;
-		}
+		} else
+			uart_putc_raw('!'); /* display reserve empty — check simplefb.h */
 	}
 	uart_putc_raw('2');
 	uart_putc_raw('3');

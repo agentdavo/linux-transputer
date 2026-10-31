@@ -1316,8 +1316,20 @@ int __init blk_dev_init(void)
 			sizeof_field(struct bio, bi_opf));
 
 	/* used for unplugging and affects IO latency/throughput - HIGHPRI */
+#ifdef CONFIG_TRANSPUTER
+	/*
+	 * WQ_PERCPU walks pcpu_balance_populated (chunk create + memset).
+	 * On T9 that path burns >70M cycles without returning — UART stops
+	 * after genhd 'b' (class_register ok).  UP has one CPU; UNBOUND
+	 * is the correct pool and avoids that pcpu populate storm.
+	 */
+	kblockd_workqueue = alloc_workqueue("kblockd",
+					    WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_UNBOUND, 0);
+	*(volatile unsigned int *)0x10000000u = 'k';
+#else
 	kblockd_workqueue = alloc_workqueue("kblockd",
 					    WQ_MEM_RECLAIM | WQ_HIGHPRI | WQ_PERCPU, 0);
+#endif
 	if (!kblockd_workqueue)
 		panic("Failed to create kblockd\n");
 

@@ -1388,6 +1388,10 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 
+#ifdef CONFIG_TRANSPUTER
+	/* One '.' per completed initcall — identifies a stuck fn by absence. */
+	*(volatile unsigned int *)0x10000000u = (unsigned int)'.';
+#endif
 	do_trace_initcall_start(fn);
 	ret = fn();
 	do_trace_initcall_finish(fn, ret);
@@ -1443,6 +1447,12 @@ static void __init do_initcall_level(int level, char *command_line)
 {
 	initcall_entry_t *fn;
 
+#ifdef CONFIG_TRANSPUTER
+	/* One char per level: 0=pure … 7=late.  I1→I2 hang diagnosis. */
+	*(volatile unsigned int *)0x10000000u =
+		(unsigned int)('0' + (level & 7));
+#endif
+
 	parse_args(initcall_level_names[level],
 		   command_line, __start___param,
 		   __stop___param - __start___param,
@@ -1485,6 +1495,13 @@ static void __init do_basic_setup(void)
 	cpuset_init_smp();
 	ksysfs_init();
 	driver_init();
+#ifdef CONFIG_TRANSPUTER
+	{
+		const char *s = "Id\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
+#endif
 	init_irq_proc();
 	do_ctors();
 	do_initcalls();
@@ -1504,6 +1521,13 @@ static int run_init_process(const char *init_filename)
 	const char *const *p;
 
 	argv_init[0] = init_filename;
+#ifdef CONFIG_TRANSPUTER
+	{
+		const char *s = "G3\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
+#endif
 	pr_info("Run %s as init process\n", init_filename);
 	pr_debug("  with arguments:\n");
 	for (p = argv_init; *p; p++)
@@ -1700,11 +1724,32 @@ static noinline void __init kernel_init_freeable(void)
 	padata_init();
 	page_alloc_init_late();
 
+#ifdef CONFIG_TRANSPUTER
+	{
+		const char *s = "I1\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
+#endif
 	do_basic_setup();
+#ifdef CONFIG_TRANSPUTER
+	{
+		const char *s = "I2\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
+#endif
 
 	kunit_run_all_tests();
 
 	wait_for_initramfs();
+#ifdef CONFIG_TRANSPUTER
+	{
+		const char *s = "I3\n";
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+	}
+#endif
 	console_on_rootfs();
 
 	/*
@@ -1713,6 +1758,30 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 	int ramdisk_command_access;
 	ramdisk_command_access = init_eaccess(ramdisk_execute_command);
+#ifdef CONFIG_TRANSPUTER
+	{
+		const char *s = "Ea\n";
+		int sh;
+		while (*s)
+			*(volatile unsigned int *)0x10000000u = (unsigned char)*s++;
+		for (sh = 28; sh >= 0; sh -= 4) {
+			unsigned int d = ((unsigned int)ramdisk_command_access >> sh) & 0xfu;
+			*(volatile unsigned int *)0x10000000u =
+				(unsigned int)(d < 10u ? '0' + d : 'a' + d - 10u);
+		}
+		*(volatile unsigned int *)0x10000000u = '\n';
+	}
+	/*
+	 * __setup("rdinit=") is not dispatched (TCC .init.setup).  Default
+	 * ramdisk_execute_command is already "/init".  eaccess can fail
+	 * (path_permission / no /dev/console) after a successful unpack;
+	 * still exec /init rather than prepare_namespace (block root).
+	 */
+	if (ramdisk_command_access != 0)
+		pr_warn("init_eaccess(%s)=%d; trying rdinit anyway\n",
+			ramdisk_execute_command ? ramdisk_execute_command : "(null)",
+			ramdisk_command_access);
+#else
 	if (ramdisk_command_access != 0) {
 		if (ramdisk_execute_command_set)
 			pr_warn("check access for rdinit=%s failed: %i, ignoring\n",
@@ -1720,6 +1789,7 @@ static noinline void __init kernel_init_freeable(void)
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}
+#endif
 
 	/*
 	 * Ok, we have completed the initial bootup, and

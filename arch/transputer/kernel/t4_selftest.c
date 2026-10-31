@@ -23,11 +23,14 @@
 #include <linux/io.h>
 
 /* MMIO addresses */
+#include <asm/simplefb.h>
 #define UART0_STATUS    0x10000004
 #define KBD_UART_STATUS 0x11000004
 #define MOUSE_UART_STATUS 0x12000004
 #define SD_BASE         0x20000000
-#define VGA_FB_BASE     0x81E00000
+/* Follows the simplefb profile: 0x81000000 on the SPINE chip, 0x81E00000 on
+ * the T4 emulator — the selftest must not probe the other profile's carve. */
+#define VGA_FB_BASE     TRANSPUTER_FB_BASE
 #define T4NET_STATUS    0x30000000
 
 /* Test result counters */
@@ -232,7 +235,7 @@ static void test_vga_fb(void)
     fb[0] = saved;
 
     if (readback == 0xDEADBEEF)
-        test_pass("VGA framebuffer (write+readback @ 0x81E00000)");
+        test_pass("VGA framebuffer (write+readback @ FB base)");
     else
         test_fail("VGA framebuffer", "readback mismatch");
 }

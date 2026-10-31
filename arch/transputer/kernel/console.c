@@ -16,6 +16,8 @@
 
 /* ---- printk console ---- */
 
+extern void fbtext_putc(char c);
+
 static void tr_console_write(struct console *con, const char *s, unsigned int n)
 {
 	unsigned int i;
@@ -24,6 +26,7 @@ static void tr_console_write(struct console *con, const char *s, unsigned int n)
 		if (s[i] == '\n')
 			uart_putc('\r');
 		uart_putc(s[i]);
+		fbtext_putc(s[i]);
 	}
 }
 
@@ -64,6 +67,7 @@ static int uart_tty_write(struct tty_struct *tty,
 		if (buf[i] == '\n')
 			uart_putc('\r');
 		uart_putc(buf[i]);
+		fbtext_putc(buf[i]);
 	}
 	return count;
 }

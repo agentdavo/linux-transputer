@@ -75,8 +75,9 @@ config TRANSPUTER_SPINE_CHIP
 	default n
 	help
 	  Use the SPINE SoC map for bring-up on the GF180MCU RTL model
-	  (t9_sdram_btl, 128 MiB SDRAM, PPU FB carve at 0x81000000).
-	  Leave disabled for T4 TransputerOS (32 MiB, FBWM at 0x81e00000).
+	  (t9_sdram_btl, PPU FB carve at 0x81000000). Leave disabled for
+	  T4 TransputerOS (FBWM at 0x81e00000).
+	  RAM_MIB=32 is enough: the SPINE display box is +16..+22 MiB.
 
 	  UART remains at 0x10000000 (matches SPINE D0 uart0 and T4).
 	  simplefb still uses platform_device "simple-framebuffer" (fbdev).
@@ -89,9 +90,11 @@ config TRANSPUTER_RAM_MIB
 	default 128 if TRANSPUTER_SPINE_CHIP
 	default 32
 	help
-	  Amount of contiguous RAM starting at 0x80000000. This must match
-	  the T4 emulator -sm address-bit setting (32 MiB is -sm 25) or the
-	  SPINE sim aperture (128 MiB when TRANSPUTER_SPINE_CHIP).
+	  Amount of contiguous RAM starting at 0x80000000. Must match the
+	  T4 emulator -sm setting (32 MiB is -sm 25). Keep 32 until /init
+	  works — 128 MiB memmap is ~4x and is not required for the FB
+	  carve (SPINE 0x81000000..0x81600000, T4 0x81a00000..0x82000000).
+	  The sim SDRAM aperture is 128 MiB either way.
 
 config TRANSPUTER_L_THDS_BOOT
 	bool "Install L-process THDS early (selth)"

@@ -5281,13 +5281,32 @@ static int __init blk_mq_init(void)
 {
 	int i;
 
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = 'Q';
+	*(volatile unsigned int *)0x10000000u = '1';
+#endif
 	for_each_possible_cpu(i)
 		init_llist_head(&per_cpu(blk_cpu_done, i));
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = '2';
+#endif
 	for_each_possible_cpu(i)
 		INIT_CSD(&per_cpu(blk_cpu_csd, i),
 			 __blk_mq_complete_request_remote, NULL);
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = '3';
+#endif
 	open_softirq(BLOCK_SOFTIRQ, blk_done_softirq);
-
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = '4';
+#endif
+	/*
+	 * UP / no hotplug: __cpuhp_setup_state lives in huge kernel/cpu.c and
+	 * TCC has miscompiled tails of that class of function (PROCESS/flat
+	 * finish was split for the same reason).  Callbacks are never invoked
+	 * on a single-CPU T9, so skip the registration.
+	 */
+#ifndef CONFIG_TRANSPUTER
 	cpuhp_setup_state_nocalls(CPUHP_BLOCK_SOFTIRQ_DEAD,
 				  "block/softirq:dead", NULL,
 				  blk_softirq_cpu_dead);
@@ -5296,6 +5315,10 @@ static int __init blk_mq_init(void)
 	cpuhp_setup_state_multi(CPUHP_AP_BLK_MQ_ONLINE, "block/mq:online",
 				blk_mq_hctx_notify_online,
 				blk_mq_hctx_notify_offline);
+#endif
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = '5';
+#endif
 	return 0;
 }
 subsys_initcall(blk_mq_init);

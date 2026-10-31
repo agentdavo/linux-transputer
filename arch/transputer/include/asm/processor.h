@@ -55,8 +55,11 @@ struct thread_struct {
 }
 
 /* CPU idle */
+extern void transputer_poll_tick(void);
+
 static inline void cpu_relax(void)
 {
+	transputer_poll_tick();
 	barrier();
 }
 

@@ -992,15 +992,35 @@ static int __init genhd_device_init(void)
 {
 	int error;
 
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = 'G';
+	*(volatile unsigned int *)0x10000000u = 'a';
+	/* kblockd WQ create livelocks in pcpu_balance_populated on T9.
+	 * PID 1 is ramfs; block class is not required to reach /init. */
+	*(volatile unsigned int *)0x10000000u = 's';
+	return 0;
+#endif
 	error = class_register(&block_class);
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = 'b';
+#endif
 	if (unlikely(error))
 		return error;
 	blk_dev_init();
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = 'c';
+#endif
 
 	register_blkdev(BLOCK_EXT_MAJOR, "blkext");
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = 'd';
+#endif
 
 	/* create top-level block dir */
 	block_depr = kobject_create_and_add("block", NULL);
+#ifdef CONFIG_TRANSPUTER
+	*(volatile unsigned int *)0x10000000u = 'e';
+#endif
 	return 0;
 }
 

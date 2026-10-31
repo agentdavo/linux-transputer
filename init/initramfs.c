@@ -599,7 +599,13 @@ static int __init keepinitrd_setup(char *__unused)
 __setup("keepinitrd", keepinitrd_setup);
 #endif
 
+#ifdef CONFIG_TRANSPUTER
+/* Unpack on the boot thread.  Async needs a worker that can run while
+ * kernel_init blocks in wait_for_initramfs(); that path is unproven on T9. */
+static bool __initdata initramfs_async = false;
+#else
 static bool __initdata initramfs_async = true;
+#endif
 static int __init initramfs_async_setup(char *str)
 {
 	return kstrtobool(str, &initramfs_async) == 0;

@@ -24,7 +24,12 @@
 extern void do_exit(long code);
 
 /* Match t4/t9000_protect.h trap causes */
+#define T9K_TRAP_ACCESS		1
+#define T9K_TRAP_PRIV		2
 #define T9K_TRAP_SYSCALL	3
+#define T9K_TRAP_ERROR		4
+#define T9K_TRAP_TIMESLICE	5
+#define T9K_TRAP_BREAKPOINT	6
 
 #define T9K_PS_CNTL	0
 #define T9K_PS_EPTR	1
@@ -36,8 +41,11 @@ extern void do_exit(long code);
 #define T9K_PDS_WORDS	11
 #define T9K_NULL_REGION	0x80000000u
 
-/* Provided by t9000_goprot.S — real T9000 encodings (60 FA / 60 F8) */
-void t9k_asm_goprot(unsigned long pds_phys, unsigned long rods_phys);
+/* Provided by t9000_goprot.S — real T9000 encodings (60 FA / 60 F8).
+ * Returns (et.type << 8) | t.reason composed from the ISM supervisor-resume
+ * Areg/Breg (meaningful on the SPINE RTL; garbage on T4, which delivers the
+ * cause through PDS.cntl instead — see the per-target extraction below). */
+int t9k_asm_goprot(unsigned long pds_phys, unsigned long rods_phys);
 void t9k_asm_syscall(void);
 
 /*
@@ -47,6 +55,37 @@ void t9k_asm_syscall(void);
  */
 static u32 soft_pds_buf[T9K_PDS_WORDS];
 static u32 soft_rods_buf[4];
+
+#ifdef CONFIG_TRANSPUTER_SPINE_CHIP
+/*
+ * ISM ABI (SPINE RTL): the P-trap resumes the supervisor with
+ * A = t.reason (ISM Table 10.5), B = et.type (Table 10.10); t9k_asm_goprot
+ * returns them composed.  Map onto the T4 cause codes this file speaks.
+ */
+static int t9k_map_ism_cause(int composed)
+{
+	unsigned int reason = (unsigned int)composed & 0xffu;
+	unsigned int etype  = (unsigned int)composed >> 8;
+
+	switch (reason) {
+	case 0x08:			/* t.Scall */
+		return T9K_TRAP_SYSCALL;
+	case 0x06:			/* t.Time */
+		return T9K_TRAP_TIMESLICE;
+	case 0x02:			/* t.Break */
+		return T9K_TRAP_BREAKPOINT;
+	case 0x00:			/* t.Error */
+	case 0x0C:			/* t.Cerror */
+		if (etype == 0x04)	/* et.AccessViolation */
+			return T9K_TRAP_ACCESS;
+		if (etype == 0x01)	/* et.PrivInstruction */
+			return T9K_TRAP_PRIV;
+		return T9K_TRAP_ERROR;
+	default:
+		return T9K_TRAP_ERROR;
+	}
+}
+#endif
 
 /*
  * Soft-mm enforcement: 0 = track only (identity access_ok), 1 = ACTIVE.
@@ -61,6 +100,24 @@ static u32 soft_rods_buf[4];
 #endif
 static int t9k_soft_enforce = T9K_SOFT_ENFORCE_DEFAULT;
 static int t9k_hard_p = T9K_HARD_P_DEFAULT;
+
+/* Registered handlers make the cmdline authoritative and stop the flags
+ * being reported as "Unknown kernel command line parameters" and leaking
+ * into /init's argv. hard implies enforce. */
+static int __init t9k_enforce_setup(char *str)
+{
+	t9k_soft_enforce = 1;
+	return 1;
+}
+__setup("t9k_enforce", t9k_enforce_setup);
+
+static int __init t9k_hard_p_setup(char *str)
+{
+	t9k_hard_p = 1;
+	t9k_soft_enforce = 1;
+	return 1;
+}
+__setup("t9k_hard_p", t9k_hard_p_setup);
 
 /* Classic L-mode enter (switch.S) — used when hard P is off or goprot no-ops. */
 extern void __transputer_enter_exec(unsigned long entry, unsigned long wptr);
@@ -342,8 +399,10 @@ void t9k_soft_mm_clear(struct task_struct *t)
 
 	if (mm)
 		memset(mm, 0, sizeof(*mm));
-	/* T4 leave_p MMIO — safe no-op if not on T4 */
+#ifndef CONFIG_TRANSPUTER_SPINE_CHIP
+	/* T4 leave_p MMIO backdoor — the SPINE RTL has no device there */
 	*(volatile unsigned int *)0xA000001Cu = 0;
+#endif
 }
 EXPORT_SYMBOL(t9k_soft_mm_clear);
 
@@ -443,6 +502,11 @@ static void fill_pds(u32 *pds, u32 entry, u32 wsp)
 	/* Explicit indices — match t4/t9000_protect.h */
 	pds[4] = wsp;	/* SWPTR */
 	pds[5] = entry;	/* SIPTR */
+#ifdef CONFIG_TRANSPUTER_SPINE_CHIP
+	/* ps.Cntl is the control word goprot loads into StatusReg (ISM Table
+	 * 9.3): default CW = IntOvTeBit only, matching a fresh L-process. */
+	pds[0] = 0x00000080u;
+#endif
 }
 
 /*
@@ -472,9 +536,13 @@ int t9k_enter_user_p(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 	 * Hard path: real goprot (T4 emulated).  On return, PDS.cntl low 16
 	 * is trap cause.  Without T4_PROTECT the insn may be a no-op (cause 0).
 	 */
+#ifdef CONFIG_TRANSPUTER_SPINE_CHIP
+	cause = (u32)t9k_map_ism_cause(
+		t9k_asm_goprot((unsigned long)pds, (unsigned long)rods));
+#else
 	t9k_asm_goprot((unsigned long)pds, (unsigned long)rods);
-
 	cause = pds[T9K_PS_CNTL] & 0xffffu;
+#endif
 	if (cause == 0) {
 		pr_info_once("t9000_prot: soft P active entry=%08x wsp=%08x\n",
 			     entry, wsp);
@@ -516,14 +584,24 @@ int t9k_run_user_until_exit(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 			mm->rods_cache[i] = rods[i];
 	}
 	fill_pds(pds, entry, wsp);
-	pds[0] = 0; /* CNTL */
+#ifndef CONFIG_TRANSPUTER_SPINE_CHIP
+	pds[0] = 0; /* CNTL (T4 cause slot; SPINE keeps fill_pds's control word) */
+#endif
 	mm->pds_phys = (u32)(unsigned long)pds;
-	/* Leave P if a prior C-call left is_p set — goprot must start from L. */
+#ifndef CONFIG_TRANSPUTER_SPINE_CHIP
+	/* Leave P if a prior C-call left is_p set — goprot must start from L.
+	 * (T4 MMIO backdoor; the RTL always reverts to L on a P-trap.) */
 	*(volatile unsigned int *)0xA000001Cu = 0;
+#endif
 
 	for (;;) {
+#ifdef CONFIG_TRANSPUTER_SPINE_CHIP
+		cause = t9k_map_ism_cause(
+			t9k_asm_goprot((unsigned long)pds, (unsigned long)rods));
+#else
 		t9k_asm_goprot((unsigned long)pds, (unsigned long)rods);
 		cause = (int)(pds[T9K_PS_CNTL] & 0xffffu);
+#endif
 
 		if (cause == 0)
 			return 0; /* soft no-op — fall back to L enter */
@@ -571,7 +649,12 @@ int t9k_run_user_until_exit(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 			pds[T9K_PS_SAREG] = (u32)ret;
 			/* Userspace trap stub reads fixed return slot after re-goprot. */
 			*(volatile u32 *)0x80000068u = (u32)ret;
-			pds[T9K_PS_CNTL] = 0; /* clear for next re-enter */
+#ifndef CONFIG_TRANSPUTER_SPINE_CHIP
+			/* T4 keeps the cause here; clear for next re-enter.
+			 * On the RTL ps.Cntl is the saved user STATUS that the
+			 * next goprot reloads — never wipe it. */
+			pds[T9K_PS_CNTL] = 0;
+#endif
 			if (++restarts > 100000)
 				return -EAGAIN;
 			continue;
@@ -617,8 +700,10 @@ void t9k_enter_userspace(unsigned long entry, unsigned long wptr)
 		 */
 		pr_info("t9000_prot: P-session end cause=%d entry=%08lx\n",
 			cause, entry);
-		/* Ensure L before task teardown */
+#ifndef CONFIG_TRANSPUTER_SPINE_CHIP
+		/* Ensure L before task teardown (T4 MMIO backdoor) */
 		*(volatile unsigned int *)0xA000001Cu = 0;
+#endif
 		do_exit(cause);
 	}
 
