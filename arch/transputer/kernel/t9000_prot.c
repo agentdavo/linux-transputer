@@ -43,8 +43,9 @@ extern void do_exit(long code);
 
 /* Provided by t9000_goprot.S — real T9000 encodings (60 FA / 60 F8).
  * Returns (et.type << 8) | t.reason composed from the ISM supervisor-resume
- * Areg/Breg (meaningful on the SPINE RTL; garbage on T4, which delivers the
- * cause through PDS.cntl instead — see the per-target extraction below). */
+ * Areg/Breg.  The SPINE RTL and T4 both deliver them; T4 also leaves its own
+ * cause code in PDS.cntl, which the non-SPINE build reads instead — see the
+ * per-target extraction below. */
 int t9k_asm_goprot(unsigned long pds_phys, unsigned long rods_phys);
 void t9k_asm_syscall(void);
 
