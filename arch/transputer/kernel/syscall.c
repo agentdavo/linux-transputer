@@ -948,31 +948,17 @@ switch (number) {
 	}
 
 	case __NR_socket: {
-		int family = (int)a1;
-		int type = (int)a2;
-		int protocol = (int)a3;
-		int flags;
 		int fd;
-		struct socket *sock;
 
-		flags = type & ~SOCK_TYPE_MASK;
-		type &= SOCK_TYPE_MASK;
-		if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
-			flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
-		fd = sock_create(family, type, protocol, &sock);
+		fd = __sys_socket((int)a1, (int)a2, (int)a3);
 		if (fd < 0)
 			return fd;
-		fd = sock_map_fd(sock, flags & (O_CLOEXEC | O_NONBLOCK));
-		if (fd < 0) {
-			sock_release(sock);
-			return fd;
-		}
 		if (fd >= TP_MAX_FDS) {
 			sys_close(fd);
 			return -EMFILE;
 		}
 		tp_fd_table[fd].kind = TP_FD_SOCKET;
-		tp_fd_table[fd].flags = type & ~SOCK_TYPE_MASK;
+		tp_fd_table[fd].flags = (int)a2 & ~SOCK_TYPE_MASK;
 		return fd;
 	}
 

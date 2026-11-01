@@ -240,10 +240,8 @@ void __init clear_bss(void)
  * to __con_initcall_end calling each function pointer. */
 typedef int (*initcall_t)(void);
 extern int transputer_console_init(void);
-extern int fb_console_init(void);
 initcall_t __con_initcall_start[] = {
 	transputer_console_init,
-	fb_console_init,
 };
 initcall_t __con_initcall_end[1] = {0};
 
