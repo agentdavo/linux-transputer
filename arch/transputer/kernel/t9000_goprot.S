@@ -4,9 +4,12 @@
  * void t9k_asm_goprot(unsigned long pds_phys, unsigned long rods_phys);
  * void t9k_asm_syscall(void);
  *
- * SPINE CALL (after exec): A=return Iptr (@W[0]), B=arg0, C=arg1.
- * T4 also writes ABC into W[1..3]; SPINE call_active does the same when
- * multi-beat frame is healthy.  Prefer eval-stack reshuffle so either path works.
+ * ISM call (App. A, §7.11.2): W[0] = return Iptr, W[1..3] = the A/B/C
+ * the caller had, Areg = return Iptr, Breg and Creg undefined.  So the
+ * arguments must come from the frame - W[1] = pds, W[2] = rods - exactly
+ * as every TCC-compiled callee reads them.  (Taking them from B/C after
+ * the call relied on one implementation's leftovers and handed goprot
+ * PDS=0 RODS=0 on T4, which leaves B/C as the T800 does.)
  *
  * goprot needs A=PDS, B=RODS (bytes 60 FA).
  * RET reads IPtr from WPtr[0] and does WPtr += 4.
@@ -15,8 +18,8 @@
 
 .global t9k_asm_goprot
 t9k_asm_goprot:
-	/* Entry: A=ret, B=pds, C=rods → need A=pds, B=rods */
-	.byte 0xD1		/* stl 1: drop ret from A → A=pds, B=rods */
+	.byte 0x72		/* ldl 2:  A=rods */
+	.byte 0x71		/* ldl 1:  A=pds, B=rods */
 	.byte 0x60, 0xFA	/* goprot */
 	/*
 	 * ISM resume ABI (the SPINE RTL follows the book): when the P-session
