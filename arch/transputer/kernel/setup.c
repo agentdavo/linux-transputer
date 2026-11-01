@@ -55,19 +55,6 @@ void __init setup_arch(char **cmdline_p)
 {
 	uart_putc_raw('A');
 
-	/* TRANSPUTER WORKAROUND: Force console_drivers to NULL.
-	 * Despite BSS being zeroed in head.S, some data relocation
-	 * or initialization code writes a garbage value to this address.
-	 * Without this, register_console() follows a corrupted linked list. */
-	{
-		extern struct console *console_drivers;
-		extern int preferred_console;
-		extern int selected_console;
-		/* Use volatile to prevent any optimization */
-		*(volatile unsigned long *)&console_drivers = 0;
-		preferred_console = -1;
-		selected_console = -1;
-	}
 	uart_putc_raw('B');
 
 	/* Set up command line — byte loop (avoid sized_strscpy / TCC edge cases) */
