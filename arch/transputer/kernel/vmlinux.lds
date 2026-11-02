@@ -1,8 +1,8 @@
 # 1 "arch/transputer/kernel/vmlinux.lds.S"
 # 1 "<command line>" 1
-# 32 "<command line>"
+# 37 "<command line>"
 # 1 "./include/linux/compiler-version.h" 1
-# 32 "<command line>" 2
+# 37 "<command line>" 2
 
 # 1 "./include/linux/kconfig.h" 1
 
@@ -12,7 +12,7 @@
 
 # 1 "./include/generated/autoconf.h" 1
 # 6 "./include/linux/kconfig.h" 2
-# 33 "<command line>" 2
+# 38 "<command line>" 2
 # 1 "arch/transputer/kernel/vmlinux.lds.S" 2
 
 
