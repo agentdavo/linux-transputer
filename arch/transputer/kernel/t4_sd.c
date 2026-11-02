@@ -79,8 +79,8 @@ static void t4sd_submit_bio(struct bio *bio)
 	void *buf;
 
 	bvec = &bio->bi_io_vec[iter.bi_idx];
-	offset = bvec->bv_offset + iter.bi_bvec_done;
-	len = bvec->bv_len - iter.bi_bvec_done;
+	offset = bvec->bv_offset + iter.bi_offset;
+	len = bvec->bv_len - iter.bi_offset;
 	if (len > iter.bi_size)
 		len = iter.bi_size;
 	if (len > PAGE_SIZE - (offset & (PAGE_SIZE - 1)))
@@ -94,9 +94,9 @@ static void t4sd_submit_bio(struct bio *bio)
 	}
 	sd_off += len;
 	iter.bi_size -= len;
-	iter.bi_bvec_done += len;
-	if (iter.bi_bvec_done == bvec->bv_len) {
-		iter.bi_bvec_done = 0;
+	iter.bi_offset += len;
+	if (iter.bi_offset == bvec->bv_len) {
+		iter.bi_offset = 0;
 		iter.bi_idx++;
 	}
     }

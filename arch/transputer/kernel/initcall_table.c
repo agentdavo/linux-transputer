@@ -8,11 +8,12 @@
  * creates a scattered function pointer in .data; the kernel's
  * do_initcalls() loop has nothing to iterate.
  *
- * Fix: define __initcall_start as a real 128-slot array.  The transputer
- * linker (transputer-link.c tp_populate_initcall_table) scans all
- * __initcall_* symbols, sorts them by level, and writes the function
- * pointers into this array.  Before relocation it defines every Linux 7
- * level boundary as an absolute symbol at the correct array offset.
+ * Fix: define __initcall_start as a real array.  The transputer linker
+ * (transputer-link.c tp_populate_initcall_table) scans all __initcall_*
+ * symbols, sorts them by level, and writes the function pointers into this
+ * array, taking its capacity from the array's symbol size.  Before relocation
+ * it defines every Linux 7 level boundary as an absolute symbol at the
+ * correct array offset.
  *
  * The boundary names below provide definitions during vmlinux.o/modpost.
  * The final Transputer link changes their symbols to SHN_ABS before normal
@@ -22,12 +23,13 @@
 typedef int (*initcall_t)(void);
 
 /*
- * The consolidated initcall table.  128 slots is enough for the ~65
- * initcalls in the current transputer kernel build, with room to grow.
+ * The consolidated initcall table.  Linux 7.4-rc1 with tpos_defconfig has
+ * 129 initcalls, one more than the original 128 slots; 256 leaves room to
+ * grow.  The linker reports an overflow rather than truncating the table.
  * Initialized to zero so unused slots are NULL (do_one_initcall skips
  * NULL entries on some paths, and the loop terminates at __initcall_end).
  */
-initcall_t __initcall_start[128]
+initcall_t __initcall_start[256]
 	__attribute__((section(".initcall.table"), used, aligned(4))) = { 0 };
 
 /*
