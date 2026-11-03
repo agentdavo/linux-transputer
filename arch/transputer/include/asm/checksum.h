@@ -1,8 +1,10 @@
 #ifndef _ASM_TRANSPUTER_CHECKSUM_H
 #define _ASM_TRANSPUTER_CHECKSUM_H
 
+#ifdef __TVX__
 /*
- * Internet checksum via the TVX CSUM instruction (OPR 0x1F3).
+ * Internet checksum via the TVX CSUM instruction (OPR 0x1F3), when the
+ * kernel is built with -mt9000tvx; otherwise lib/checksum.c's do_csum.
  *
  * __csumb pairs bytes into little-endian halfwords starting at the
  * given pointer regardless of alignment - the same byte-stream
@@ -25,6 +27,7 @@ static inline unsigned int do_csum(const unsigned char *buff, int len)
 		return 0;
 	return __csumb(buff, 0u, (unsigned int)len);
 }
+#endif /* __TVX__ */
 
 #include <asm-generic/checksum.h>
 
