@@ -24,32 +24,51 @@
 static int fbt_col, fbt_row;
 static int fbt_off;   /* "nofbtext" */
 
+/* The four pixels of each 4-bit slice of a font row, high bit leftmost. */
+#define FBT_PX(n, b)	((((n) >> (b)) & 1) ? FBT_FG : FBT_BG)
+#define FBT_NIB(n)	{ FBT_PX(n, 3), FBT_PX(n, 2), FBT_PX(n, 1), FBT_PX(n, 0) }
+static const u32 fbt_nib[16][4] = {
+	FBT_NIB(0),  FBT_NIB(1),  FBT_NIB(2),  FBT_NIB(3),
+	FBT_NIB(4),  FBT_NIB(5),  FBT_NIB(6),  FBT_NIB(7),
+	FBT_NIB(8),  FBT_NIB(9),  FBT_NIB(10), FBT_NIB(11),
+	FBT_NIB(12), FBT_NIB(13), FBT_NIB(14), FBT_NIB(15),
+};
+
+/*
+ * The boot spends most of its console time here, so both loops are written
+ * for the transputer: eight word stores a pass through a pointer, and a
+ * glyph row as two table lookups and eight copies, with no per-pixel shift,
+ * test or branch.  No MOVE, which is multi-cycle on the RTL.
+ */
 static void fbt_clear_row(int row)
 {
-	volatile u32 *fb = (volatile u32 *)TRANSPUTER_FB_BASE;
-	u32 *p = (u32 *)fb + (u32)row * 16u * TRANSPUTER_FB_WIDTH;
-	unsigned int i;
+	u32 *p = (u32 *)TRANSPUTER_FB_BASE +
+		 (u32)row * 16u * TRANSPUTER_FB_WIDTH;
+	u32 *end = p + 16u * TRANSPUTER_FB_WIDTH;	/* a multiple of 8 */
 
-	for (i = 0; i < 16u * TRANSPUTER_FB_WIDTH; i++)
-		p[i] = FBT_BG;
+	for (; p != end; p += 8) {
+		p[0] = FBT_BG; p[1] = FBT_BG; p[2] = FBT_BG; p[3] = FBT_BG;
+		p[4] = FBT_BG; p[5] = FBT_BG; p[6] = FBT_BG; p[7] = FBT_BG;
+	}
 }
 
 static void fbt_glyph(int col, int row, unsigned char c)
 {
-	volatile u32 *fb = (volatile u32 *)TRANSPUTER_FB_BASE;
+	volatile u32 *p;
 	const unsigned char *g;
-	unsigned int y, x;
+	unsigned int y;
 
 	if (c < 32 || c > 126)
 		c = ' ';
 	g = fbtext_font[c - 32];
-	for (y = 0; y < 16; y++) {
-		volatile u32 *p = fb +
-			((u32)row * 16u + y) * TRANSPUTER_FB_WIDTH +
-			(u32)col * 8u;
-		unsigned char bits = g[y];
-		for (x = 0; x < 8; x++)
-			p[x] = (bits & (0x80u >> x)) ? FBT_FG : FBT_BG;
+	p = (volatile u32 *)TRANSPUTER_FB_BASE +
+	    (u32)row * 16u * TRANSPUTER_FB_WIDTH + (u32)col * 8u;
+	for (y = 0; y < 16; y++, p += TRANSPUTER_FB_WIDTH) {
+		const u32 *hi = fbt_nib[g[y] >> 4];
+		const u32 *lo = fbt_nib[g[y] & 15];
+
+		p[0] = hi[0]; p[1] = hi[1]; p[2] = hi[2]; p[3] = hi[3];
+		p[4] = lo[0]; p[5] = lo[1]; p[6] = lo[2]; p[7] = lo[3];
 	}
 }
 
