@@ -109,25 +109,6 @@ static int u64_is_neg(u64_u v)
 	return (v.p.hi & 0x80000000u) != 0;
 }
 
-static int u64_cmp(u64_u a, u64_u b)
-{
-	if (a.p.hi != b.p.hi)
-		return a.p.hi > b.p.hi ? 1 : -1;
-	if (a.p.lo != b.p.lo)
-		return a.p.lo > b.p.lo ? 1 : -1;
-	return 0;
-}
-
-static u64_u u64_sub(u64_u a, u64_u b)
-{
-	u64_u r;
-	u32 lo = a.p.lo - b.p.lo;
-	u32 borrow = (a.p.lo < b.p.lo);
-	r.p.lo = lo;
-	r.p.hi = a.p.hi - b.p.hi - borrow;
-	return r;
-}
-
 static u64_u u64_add(u64_u a, u64_u b)
 {
 	u64_u r;
@@ -149,52 +130,78 @@ static u64_u u64_neg(u64_u v)
 	return u64_add(inv, one);
 }
 
-static u64_u u64_shl1(u64_u v)
+/*
+ * (hi:lo) / d, for hi < d, is one transputer long divide: ldiv leaves the
+ * quotient in A and the remainder in B, which is how a u64 comes back -
+ * the quotient in the low word, the remainder in the high one.
+ */
+u64 __tp_ldivqr(u32 hi, u32 lo, u32 d);
+__asm__(
+	"	.text\n"
+	"	.globl __tp_ldivqr\n"
+	"	.type __tp_ldivqr, @function\n"
+	"__tp_ldivqr:\n"		/* hi = W1, lo = W2, d = W3 */
+	"	ldl 1\n"
+	"	ldl 2\n"
+	"	ldl 3\n"
+	"	ldiv\n"
+	"	ret\n");
+
+static int u32_clz(u32 x)	/* x != 0 */
 {
-	u64_u r;
-	r.p.hi = (v.p.hi << 1) | (v.p.lo >> 31);
-	r.p.lo = v.p.lo << 1;
-	return r;
+	int n = 0;
+
+	if (!(x & 0xffff0000u)) { n += 16; x <<= 16; }
+	if (!(x & 0xff000000u)) { n += 8; x <<= 8; }
+	if (!(x & 0xf0000000u)) { n += 4; x <<= 4; }
+	if (!(x & 0xc0000000u)) { n += 2; x <<= 2; }
+	if (!(x & 0x80000000u)) n += 1;
+	return n;
 }
 
-static u32 u64_get_bit(u64_u v, int i)
-{
-	if (i >= 32)
-		return (v.p.hi >> (i - 32)) & 1u;
-	return (v.p.lo >> i) & 1u;
-}
-
-static void u64_set_bit(u64_u *v, int i)
-{
-	if (i >= 32)
-		v->p.hi |= (1u << (i - 32));
-	else
-		v->p.lo |= (1u << i);
-}
-
+/*
+ * A divisor below 2^32 takes two long divides: the high word, then its
+ * remainder with the low word.  A wider one leaves a quotient of at most
+ * 32 bits, estimated from the divisor's normalised top word with the
+ * dividend halved so the divide cannot overflow, then corrected once
+ * (Hacker's Delight, divdu).  It replaced a 64-step shift-and-subtract
+ * loop of helper calls, about 14,000 T800 cycles a divide.
+ */
 static u64_u u64_udivmod(u64_u dividend, u64_u divisor, u64_u *rem_out)
 {
-	u64_u result;
-	u64_u remainder;
-	int i;
+	u64_u q, r, t;
 
-	result.p.hi = 0;
-	result.p.lo = 0;
-	remainder.p.hi = 0;
-	remainder.p.lo = 0;
+	if (divisor.p.hi == 0) {
+		u32 d = divisor.p.lo;
 
-	for (i = 63; i >= 0; i--) {
-		remainder = u64_shl1(remainder);
-		remainder.p.lo |= u64_get_bit(dividend, i);
-		if (u64_cmp(remainder, divisor) >= 0) {
-			remainder = u64_sub(remainder, divisor);
-			u64_set_bit(&result, i);
+		t.v = __tp_ldivqr(0, dividend.p.hi, d);
+		q.p.hi = t.p.lo;
+		t.v = __tp_ldivqr(t.p.hi, dividend.p.lo, d);
+		q.p.lo = t.p.lo;
+		r.p.lo = t.p.hi;
+		r.p.hi = 0;
+	} else {
+		int n = u32_clz(divisor.p.hi);
+		u64 u = dividend.v, v = divisor.v;
+		u64 u1 = u >> 1;
+		u32 q0;
+
+		t.v = __tp_ldivqr((u32)(u1 >> 32), (u32)u1,
+				  (u32)((v << n) >> 32));
+		q0 = (u32)(((u64)t.p.lo << n) >> 31);
+		if (q0 != 0)
+			q0--;
+		r.v = u - (u64)q0 * v;
+		if (r.v >= v) {
+			q0++;
+			r.v -= v;
 		}
+		q.p.hi = 0;
+		q.p.lo = q0;
 	}
-
 	if (rem_out)
-		*rem_out = remainder;
-	return result;
+		*rem_out = r;
+	return q;
 }
 
 /* Division and modulo */
