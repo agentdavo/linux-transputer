@@ -36,15 +36,21 @@ static inline void *memset(void *s, int c, __kernel_size_t count)
 			p += 4096;
 			count -= 4096;
 		}
-		/* Word fill remainder */
+		/* Word fill remainder, eight stores a pass */
 		if (count >= 4) {
 			unsigned long *wp = (unsigned long *)p;
-			__kernel_size_t wcount = count >> 2;
+			__kernel_size_t n = count >> 5;
 
-			for (i = 0; i < wcount; i++)
-				wp[i] = 0;
-			p += wcount << 2;
-			count -= wcount << 2;
+			while (n--) {
+				wp[0] = 0; wp[1] = 0; wp[2] = 0; wp[3] = 0;
+				wp[4] = 0; wp[5] = 0; wp[6] = 0; wp[7] = 0;
+				wp += 8;
+			}
+			n = (count >> 2) & 7;
+			while (n--)
+				*wp++ = 0;
+			p = (unsigned char *)wp;
+			count &= 3;
 		}
 		while (count--)
 			*p++ = 0;

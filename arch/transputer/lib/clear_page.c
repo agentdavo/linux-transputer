@@ -7,6 +7,8 @@
  * whole sim TIMEOUT, never reaching setup_arch C/D, THDS, or simplefb.
  *
  * Word stores: 1024 × 32-bit = one page; works with posted SDRAM stores.
+ * Eight a pass through a pointer, a third of the instructions of an
+ * indexed one-store loop.
  */
 #include <linux/types.h>
 #include <asm/page.h>
@@ -14,8 +16,10 @@
 void clear_page_move(void *page)
 {
 	unsigned long *p = (unsigned long *)page;
-	unsigned int i;
+	unsigned long *end = p + PAGE_SIZE / sizeof(unsigned long);
 
-	for (i = 0; i < (PAGE_SIZE / sizeof(unsigned long)); i++)
-		p[i] = 0;
+	for (; p != end; p += 8) {
+		p[0] = 0; p[1] = 0; p[2] = 0; p[3] = 0;
+		p[4] = 0; p[5] = 0; p[6] = 0; p[7] = 0;
+	}
 }
