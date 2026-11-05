@@ -24,11 +24,13 @@
 /* Extract the image offset from a relocation entry, masking off the type flag */
 #define flat_get_relocate_addr(rel)		((rel) & 0x7fffffffu)
 
-/* True for PFIX (0x2X) and NFIX (0x6X) prefix bytes. */
-static inline int tp_flat_is_prefix(unsigned char b)
-{
-	return (b & 0xF0) == 0x20 || (b & 0xF0) == 0x60;
-}
+/*
+ * True for PFIX (0x2X) and NFIX (0x6X) prefix bytes, the only ones with
+ * 0x20 set and 0x90 clear.  A macro: the loader tests every prefix byte of
+ * every LDC relocation, and TinyCC calls a static inline rather than
+ * inlining it.
+ */
+#define TP_FLAT_IS_PREFIX(b)	(((b) & 0xB0) == 0x20)
 
 /*
  * Determine the length (in bytes) of the LDC prefix chain starting at p.
@@ -47,66 +49,48 @@ static inline int tp_flat_is_prefix(unsigned char b)
 static inline int tp_flat_ldc_len(const unsigned char *p)
 {
 	int i = 0;
-	while (i < TP_LDC_MAX_LEN - 1 && tp_flat_is_prefix(p[i]))
+	while (i < TP_LDC_MAX_LEN - 1 && TP_FLAT_IS_PREFIX(p[i]))
 		i++;
 	return i + 1;  /* prefixes + the terminating opcode byte */
 }
 
 /*
- * Decode a transputer LDC prefix chain of the given length to its operand.
- * Uses hardware semantics:
+ * Decode a transputer LDC prefix chain to its operand, in the one pass that
+ * finds its length.  Uses hardware semantics:
  *   PFIX n: Oreg = (Oreg | n) << 4
  *   NFIX n: Oreg = ~(Oreg | n) << 4
  *   final:  Operand = Oreg | n
  */
-static inline unsigned long tp_flat_decode_ldc_n(const unsigned char *p, int len)
+static inline unsigned long tp_flat_decode_ldc(const unsigned char *p)
 {
 	unsigned long oreg = 0;
 	int i;
-	for (i = 0; i < len - 1; i++) {
-		unsigned long nibble = p[i] & 0xF;
-		if ((p[i] & 0xF0) == 0x60)  /* NFIX */
-			oreg = (~(oreg | nibble)) << 4;
-		else  /* PFIX */
-			oreg = (oreg | nibble) << 4;
-	}
-	return oreg | (p[len - 1] & 0xF);
-}
 
-static inline unsigned long tp_flat_decode_ldc(const unsigned char *p)
-{
-	return tp_flat_decode_ldc_n(p, tp_flat_ldc_len(p));
+	for (i = 0; i < TP_LDC_MAX_LEN - 1 && TP_FLAT_IS_PREFIX(p[i]); i++) {
+		oreg |= p[i] & 0xF;
+		if (p[i] & 0x40)		/* NFIX */
+			oreg = ~oreg;
+		oreg <<= 4;
+	}
+	return oreg | (p[i] & 0xF);
 }
 
 /*
  * Re-encode an unsigned value into an EXISTING LDC chain, preserving its
  * width (derived from the current bytes at p). Uses PFIX-only encoding with
  * PFIX 0 left-padding, which represents any 32-bit value given len >= 8.
+ * Written from the opcode byte back: each prefix takes the next nibble up,
+ * which is 0 - PFIX 0 - once the value runs out.
  */
 static inline void tp_flat_encode_ldc(unsigned char *p, unsigned long val)
 {
-	int len = tp_flat_ldc_len(p);
-	int i, needed = 0, pad;
-	unsigned long tmp = val;
+	int i = tp_flat_ldc_len(p) - 1;
 
-	/* Count needed nibbles */
-	do { needed++; tmp >>= 4; } while (tmp != 0);
-	if (needed > len) needed = len;
-
-	pad = len - needed;
-
-	/* Fill prefix positions with PFIX 0 padding */
-	for (i = 0; i < len - 1; i++)
-		p[i] = 0x20;  /* PFIX 0 */
-
-	/* Encode data nibbles after padding */
-	for (i = 0; i < needed - 1; i++) {
-		int shift = (needed - 1 - i) * 4;
-		p[pad + i] = 0x20 | ((val >> shift) & 0xF);
+	p[i] = 0x40 | (val & 0xF);	/* LDC with the lowest nibble */
+	while (i-- > 0) {
+		val >>= 4;
+		p[i] = 0x20 | (val & 0xF);
 	}
-
-	/* Final byte: LDC opcode with lowest nibble */
-	p[len - 1] = 0x40 | (val & 0xF);
 }
 
 /*
