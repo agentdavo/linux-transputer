@@ -61,8 +61,14 @@ extern unsigned long memory_end;
 
 #define virt_to_page(kaddr)	pfn_to_page(virt_to_pfn(kaddr))
 #define page_to_virt(page)	pfn_to_virt(page_to_pfn(page))
-#define pfn_valid(pfn)		((pfn) >= ARCH_PFN_OFFSET && \
-				 ((pfn) - ARCH_PFN_OFFSET) < max_mapnr)
+
+/*
+ * pfn_valid() comes from asm-generic/memory_model.h, with the
+ * for_each_valid_pfn() clamped to ARCH_PFN_OFFSET that goes with it.
+ * Defining pfn_valid here drops that one, and mmzone.h's fallback then
+ * tests every pfn from 0 - over half a million at boot, as RAM starts
+ * at 0x80000000.
+ */
 
 #define virt_addr_valid(kaddr)	(((unsigned long)(kaddr) >= memory_start) && \
 				 ((unsigned long)(kaddr) < memory_end))
