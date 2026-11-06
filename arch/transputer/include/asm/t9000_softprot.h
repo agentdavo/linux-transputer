@@ -30,6 +30,7 @@ struct t9k_soft_region {
 };
 
 #define T9K_SOFT_NREGIONS	4
+#define T9K_PDS_WORDS		11
 
 /*
  * Per-task soft protection state (Phase 4 fills this on exec as P-process).
@@ -37,7 +38,7 @@ struct t9k_soft_region {
  */
 struct t9k_soft_mm {
 	struct t9k_soft_region	reg[T9K_SOFT_NREGIONS];
-	u32			pds_phys;	/* guest PDS if using T4 goprot */
+	u32			pds[T9K_PDS_WORDS];	/* hardware P-process data structure */
 	u32			flags;
 	/* Phase 9/10: multi-quarter split (per-task — not process-global static). */
 	u32			split_phys;
@@ -54,6 +55,9 @@ struct t9k_soft_mm {
 	 */
 	u32			priv_lo;
 	u32			priv_hi;
+	/* Optional disjoint workspace allocation for a cached BusyBox applet. */
+	u32			stack_base;
+	u32			stack_len;
 	/* Cached RODS for scheduler re-install without rebuild. */
 	u32			rods_cache[4];
 };
@@ -161,6 +165,9 @@ static inline int t9k_soft_ok(const struct t9k_soft_mm *mm, u32 la,
 			phys = r->phys_base + (la - base);
 		if (!t9k_shared_surface(phys, phys + (u32)len - 1) &&
 		    !t9k_shared_surface(la, end)) {
+			if (len <= mm->stack_len &&
+			    phys - mm->stack_base <= mm->stack_len - len)
+				return 1;
 			if (phys < mm->priv_lo ||
 			    phys + (u32)len - 1 >= mm->priv_hi)
 				return 0;

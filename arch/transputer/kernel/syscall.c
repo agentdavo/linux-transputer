@@ -29,6 +29,7 @@
 #include <linux/wait.h>
 #include <asm/ptrace.h>
 #include <linux/sched/task.h>
+#include <linux/sched/task_stack.h>
 #include <linux/sched/mm.h>
 #include <linux/timekeeping.h>
 #include <asm/uart.h>
@@ -65,28 +66,33 @@ static int  spawn_active;    /* 0=none, 1=outer soft, 2=nested soft */
  * (restoring over it re-entered the child forever).
  */
 #define TP_PARENT_STACK_SNAP  0x4000UL
-static unsigned char parent_stack_snap[TP_PARENT_STACK_SNAP];
-static unsigned long parent_stack_snap_base;
-static int parent_stack_snap_valid;
+static struct tp_parent_stack {
+	unsigned long base;
+	unsigned char data[TP_PARENT_STACK_SNAP];
+} parent_stacks[2];
 
 static void tp_parent_stack_save(void)
 {
-	unsigned long sp = (unsigned long)spawn_jmpbuf[0];
-	if (!sp)
+	struct tp_parent_stack *snap = &parent_stacks[spawn_active];
+	long *jb = spawn_active ? spawn_jmpbuf_nest : spawn_jmpbuf;
+	unsigned long sp = jb[0];
+
+	snap->base = 0;
+	/* A trapped caller already has a kernel-owned supervisor workspace.
+	 * Restoring a user-sized window here would overwrite live kernel data.
+	 */
+	if (!sp || object_is_on_stack((void *)sp))
 		return;
-	/* Above the 8 saved slots of the setjmp frame */
-	parent_stack_snap_base = (sp + 32UL + 15UL) & ~15UL;
-	memcpy(parent_stack_snap, (void *)parent_stack_snap_base,
-	       TP_PARENT_STACK_SNAP);
-	parent_stack_snap_valid = 1;
+	snap->base = ALIGN(sp + 8 * sizeof(long), 16);
+	memcpy(snap->data, (void *)snap->base, TP_PARENT_STACK_SNAP);
 }
 
 static void tp_parent_stack_restore(void)
 {
-	if (!parent_stack_snap_valid || !parent_stack_snap_base)
-		return;
-	memcpy((void *)parent_stack_snap_base, parent_stack_snap,
-	       TP_PARENT_STACK_SNAP);
+	struct tp_parent_stack *snap = &parent_stacks[spawn_active];
+
+	if (snap->base)
+		memcpy((void *)snap->base, snap->data, TP_PARENT_STACK_SNAP);
 }
 
 /*
@@ -130,6 +136,7 @@ static void tp_spawn_mmap_track(unsigned long addr, int order)
 #define TP_BB_STACK_SIZE   (PAGE_SIZE << TP_BB_STACK_ORDER)
 
 struct tp_bb_cache {
+	struct t9k_soft_mm protection;
 	int valid;
 	unsigned long entry;
 	unsigned long end_brk;
@@ -651,6 +658,311 @@ static long tp_getdents64(unsigned int fd, char __user *dirp,
 	return (long)buf.filled;
 }
 
+static long tp_soft_spawn(const char *path, const char *const *argv,
+			  const char *const *envp)
+{
+	/*
+	 * Synchronous spawn: load + exec child, return when it exits.
+	 *
+	 * a1 = path, a2 = argv, a3 = envp
+	 *
+	 * Uses setjmp/longjmp to save the caller's workspace.
+	 * When the child calls exit(), the exit handler longjmps
+	 * back here with the exit code.
+	 *
+	 * Returns: child's exit code (>0), or negative errno.
+	 */
+	int ret;
+	struct pt_regs regs;
+
+	if (spawn_active >= 2) {
+		/* Only one nest level (init→fbwm→app). */
+		return -EAGAIN;
+	}
+
+	{
+		const char *p = spawn_active ? "SPAWN_NEST:" : "SPAWN:";
+		while (*p)
+			uart_putc_raw(*p++);
+		p = path ? path : "(null)";
+		while (*p)
+			uart_putc_raw(*p++);
+		uart_putc_raw('\n');
+	}
+
+	/*
+	 * setjmp returns 0 on first call, and the exit code
+	 * when longjmp fires from the child's exit().
+	 * Nested soft spawns use spawn_jmpbuf_nest.
+	 */
+	{
+		long *jb = spawn_active ? spawn_jmpbuf_nest : spawn_jmpbuf;
+		ret = __transputer_spawn_setjmp(jb);
+	}
+	if (ret != 0) {
+		/*
+		 * We're back from the child's exit.
+		 * ret is the raw value from longjmp:
+		 *   256 means child called exit(0)
+		 *   otherwise it's the actual exit code
+		 *
+		 * Capture code into a static BEFORE parent stack
+		 * restore — restore can clobber this frame's locals.
+		 */
+		static int spawn_ret_code;
+		const char *p = "SPAWN_DONE:";
+		spawn_ret_code = (ret == 256) ? 0 : ret;
+		while (*p)
+			uart_putc_raw(*p++);
+		uart_putc_raw('0' + ((ret / 100) % 10));
+		uart_putc_raw('0' + ((ret / 10) % 10));
+		uart_putc_raw('0' + (ret % 10));
+		uart_putc_raw('\n');
+		tp_parent_stack_restore();
+		{
+			const char *p2 = "SPAWN_RET:";
+			while (*p2)
+				uart_putc_raw(*p2++);
+			uart_debug_hex32((unsigned long)spawn_ret_code);
+			uart_putc_raw('\n');
+		}
+		return spawn_ret_code;
+	}
+
+	/* First call — load and enter the child */
+	tp_parent_stack_save();
+	memset(&regs, 0, sizeof(regs));
+
+	/* Re-enter cached busybox for multi-applet (skip second do_execve). */
+	if (tp_bb.valid && tp_path_is_bin_applet(path)) {
+		unsigned long entry, wptr;
+		ret = tp_bb_build_stack(argv, &entry, &wptr);
+		if (ret == 0) {
+			regs.iptr = entry;
+			regs.wptr = wptr;
+			current->thread.soft_mm = tp_bb.protection;
+			if (tp_bb.stack_base) {
+				current->thread.soft_mm.stack_base = tp_bb.stack_base;
+				current->thread.soft_mm.stack_len = TP_BB_STACK_SIZE;
+			}
+			spawn_active = spawn_active ? 2 : 1;
+			tp_spawn_mmap_reset();
+			{
+				const char *pmsg = "SPAWN_GO:";
+				while (*pmsg)
+					uart_putc_raw(*pmsg++);
+				uart_debug_hex32(regs.iptr);
+				uart_putc_raw(':');
+				uart_debug_hex32(regs.wptr);
+				uart_putc_raw('\n');
+			}
+			t9k_enter_userspace(regs.iptr, regs.wptr);
+			spawn_active = spawn_active >= 2 ? 1 : 0;
+			return -ENOEXEC;
+		}
+	}
+
+	/*
+	 * Pin the caller's mm before exec: kernel_execve swaps
+	 * current->mm and mmput()s the old one, freeing the CALLER'S
+	 * bFLT image pages while the spawn setjmp still points into
+	 * them.  Once child allocations reuse those pages (deep hush
+	 * init was the first to apply enough pressure) the parent's
+	 * text is zeroed and the post-SPAWN_RET return wild-jumps.
+	 * The extra reference keeps the image resident for the
+	 * lifetime of the system; the same pin also keeps the tp_bb
+	 * cached busybox image valid across later execs.
+	 */
+	if (current->mm)
+		mmget(current->mm);
+	ret = kernel_execve(path,
+			    (const char *const *)argv,
+			    (const char *const *)envp);
+	if (ret < 0) {
+		const char *pmsg = "SPAWN_FAIL:";
+		while (*pmsg)
+			uart_putc_raw(*pmsg++);
+		uart_debug_hex32((unsigned long)ret);
+		uart_putc_raw('\n');
+		return ret;
+	}
+	regs = *current_pt_regs();
+
+	/* Cache busybox image for later /bin/* reenter */
+	if (tp_path_is_bin_applet(path) && current->mm) {
+		tp_bb.valid = 1;
+		tp_bb.entry = regs.iptr;
+		tp_bb.protection = current->thread.soft_mm;
+		tp_bb.end_brk = current->mm->context.end_brk;
+		tp_bb.start_data = current->mm->start_data;
+		tp_bb.end_data = current->mm->end_data;
+		tp_bb.start_brk = current->mm->start_brk;
+		/*
+		 * Prefer a dedicated 256K stack away from the bFLT
+		 * image so child heap/stack growth and syscall depth
+		 * cannot smash the parent's setjmp workspace.
+		 */
+		if (!tp_bb.stack_base) {
+			unsigned long pgs = __get_free_pages(
+				GFP_KERNEL, TP_BB_STACK_ORDER);
+			if (pgs) {
+				memset((void *)pgs, 0, TP_BB_STACK_SIZE);
+				tp_bb.stack_base = pgs;
+				tp_bb.stack_top = pgs + TP_BB_STACK_SIZE;
+			}
+		}
+		if (!tp_bb.stack_base) {
+			/* Fallback: image-local stack */
+			tp_bb.stack_top =
+				(regs.wptr & ~0xfffUL) + 0x2000UL;
+			if (tp_bb.stack_top < regs.wptr + 256)
+				tp_bb.stack_top = regs.wptr + 0x1000UL;
+		}
+		/*
+		 * Snapshot code+init-data+bss (data_len may be 0 — init
+		 * data lives in the text blob for this busybox bFLT).
+		 */
+		if (!tp_bb.img_snap && current->mm->start_code &&
+		    tp_bb.start_brk > current->mm->start_code) {
+			unsigned long base = current->mm->start_code;
+			unsigned long n = tp_bb.start_brk - base;
+			unsigned int order = 0;
+			if (n > 0 && n < 0x200000UL) {
+				while (order < 12 &&
+				       ((PAGE_SIZE << order) < n))
+					order++;
+				tp_bb.img_snap = (void *)
+					__get_free_pages(GFP_KERNEL, order);
+				if (tp_bb.img_snap) {
+					memcpy(tp_bb.img_snap,
+					       (void *)base, n);
+					tp_bb.img_base = base;
+					tp_bb.img_len = n;
+					tp_bb.img_order = order;
+				}
+			}
+		}
+		{
+			const char *pmsg = "BB_CACHE:";
+			while (*pmsg)
+				uart_putc_raw(*pmsg++);
+			uart_debug_hex32(tp_bb.entry);
+			uart_putc_raw(':');
+			uart_debug_hex32(tp_bb.stack_top);
+			uart_putc_raw(':');
+			uart_debug_hex32(tp_bb.stack_base);
+			uart_putc_raw(':');
+			uart_debug_hex32(tp_bb.img_len);
+			uart_putc_raw('\n');
+		}
+	}
+
+	/* Mark spawn as active so exit() knows to longjmp */
+	spawn_active = spawn_active ? 2 : 1;
+	tp_spawn_mmap_reset();
+
+
+	{
+		const char *p = "SPAWN_GO:";
+		while (*p)
+			uart_putc_raw(*p++);
+		uart_debug_hex32(regs.iptr);
+		uart_putc_raw(':');
+		uart_debug_hex32(regs.wptr);
+		uart_putc_raw('\n');
+	}
+
+	/* Enter child as P-process (goprot) or classic L enter_exec */
+	t9k_enter_userspace(regs.iptr, regs.wptr);
+
+	/* Should never reach here */
+	spawn_active = spawn_active >= 2 ? 1 : 0;
+	return -ENOEXEC;
+}
+
+static long tp_hw_spawn(const char *path, const char *const *argv,
+			const char *const *envp)
+{
+	struct pt_regs regs;
+	int ret;
+
+	{
+		const char *p = "HW_SPAWN:";
+		while (*p) uart_putc_raw(*p++);
+		p = path ? path : "(null)";
+		while (*p) uart_putc_raw(*p++);
+		uart_putc_raw('\n');
+	}
+
+	/* Load the child binary */
+	memset(&regs, 0, sizeof(regs));
+	/* Pin the caller's mm — see the tp_spawn comment above. */
+	if (current->mm)
+		mmget(current->mm);
+	ret = kernel_execve(path,
+			    (const char *const *)argv,
+			    (const char *const *)envp);
+	if (ret < 0)
+		return ret;
+	regs = *current_pt_regs();
+
+	hw_spawn_parent_desc = 0;
+
+	{
+		const char *p = "HW_SPAWN_GO:";
+		while (*p) uart_putc_raw(*p++);
+		uart_debug_hex32(regs.iptr);
+		uart_putc_raw(':');
+		uart_debug_hex32(regs.wptr);
+		uart_putc_raw('\n');
+	}
+
+	/*
+	 * This call:
+	 * 1. Stores child IPtr at child_wptr[-1]
+	 * 2. Saves parent descriptor at hw_spawn_parent_desc
+	 * 3. RUNPs the child (adds to hardware queue)
+	 * 4. STOPPs the parent (suspends — removed from queue)
+	 * 5. When child exits and RUNPs us, we resume here
+	 */
+	__transputer_hw_spawn_parent(regs.wptr, regs.iptr,
+				     &hw_spawn_parent_desc);
+
+	/* We're back! Child has exited. */
+	{
+		const char *p = "HW_SPAWN_DONE\n";
+		while (*p) uart_putc_raw(*p++);
+	}
+	return 0;
+}
+
+/* A synchronous child execs in the caller's Linux task. Keep the parent's
+ * PDS, RODS and software access windows on this supervisor call frame until
+ * the child returns (including the setjmp/longjmp and cached applet paths).
+ */
+static long tp_spawn_with_parent(long number, const char *path,
+				 const char *const *argv, const char *const *envp)
+{
+	struct t9k_soft_mm *mm = &current->thread.soft_mm;
+	struct t9k_soft_mm parent = *mm;
+	long ret;
+
+	if (number == __NR_tp_hw_spawn && !spawn_active) {
+		ret = tp_hw_spawn(path, argv, envp);
+	} else {
+		if (number == __NR_tp_hw_spawn) {
+			const char *p = "HW_SPAWN_AS_SOFT\n";
+			while (*p)
+				uart_putc_raw(*p++);
+		}
+		ret = tp_soft_spawn(path, argv, envp);
+	}
+
+	*mm = parent;
+	t9k_install_task_rods(current);
+	return ret;
+}
+
 /*
  * __transputer_syscall - main syscall entry point
  *
@@ -1083,298 +1395,10 @@ switch (number) {
 			return kernel_clone(&args);
 		}
 
-	case __NR_tp_spawn: {
-		/*
-		 * Synchronous spawn: load + exec child, return when it exits.
-		 *
-		 * a1 = path, a2 = argv, a3 = envp
-		 *
-		 * Uses setjmp/longjmp to save the caller's workspace.
-		 * When the child calls exit(), the exit handler longjmps
-		 * back here with the exit code.
-		 *
-		 * Returns: child's exit code (>0), or negative errno.
-		 */
-		int ret;
-		const char *path = (const char *)a1;
-		const char *const *argv = (const char *const *)a2;
-		const char *const *envp = (const char *const *)a3;
-		struct pt_regs regs;
-
-		if (spawn_active >= 2) {
-			/* Only one nest level (init→fbwm→app). */
-			return -EAGAIN;
-		}
-
-		{
-			const char *p = spawn_active ? "SPAWN_NEST:" : "SPAWN:";
-			while (*p)
-				uart_putc_raw(*p++);
-			p = path ? path : "(null)";
-			while (*p)
-				uart_putc_raw(*p++);
-			uart_putc_raw('\n');
-		}
-
-		/*
-		 * setjmp returns 0 on first call, and the exit code
-		 * when longjmp fires from the child's exit().
-		 * Nested soft spawns use spawn_jmpbuf_nest.
-		 */
-		{
-			long *jb = spawn_active ? spawn_jmpbuf_nest : spawn_jmpbuf;
-			ret = __transputer_spawn_setjmp(jb);
-		}
-		if (ret != 0) {
-			/*
-			 * We're back from the child's exit.
-			 * ret is the raw value from longjmp:
-			 *   256 means child called exit(0)
-			 *   otherwise it's the actual exit code
-			 *
-			 * Capture code into a static BEFORE parent stack
-			 * restore — restore can clobber this frame's locals.
-			 */
-			static int spawn_ret_code;
-			const char *p = "SPAWN_DONE:";
-			spawn_ret_code = (ret == 256) ? 0 : ret;
-			while (*p)
-				uart_putc_raw(*p++);
-			uart_putc_raw('0' + ((ret / 100) % 10));
-			uart_putc_raw('0' + ((ret / 10) % 10));
-			uart_putc_raw('0' + (ret % 10));
-			uart_putc_raw('\n');
-			tp_parent_stack_restore();
-			{
-				const char *p2 = "SPAWN_RET:";
-				while (*p2)
-					uart_putc_raw(*p2++);
-				uart_debug_hex32((unsigned long)spawn_ret_code);
-				uart_putc_raw('\n');
-			}
-			return spawn_ret_code;
-		}
-
-		/* First call — load and enter the child */
-		tp_parent_stack_save();
-		memset(&regs, 0, sizeof(regs));
-
-		/* Re-enter cached busybox for multi-applet (skip second do_execve). */
-		if (tp_bb.valid && tp_path_is_bin_applet(path)) {
-			unsigned long entry, wptr;
-			ret = tp_bb_build_stack(argv, &entry, &wptr);
-			if (ret == 0) {
-				regs.iptr = entry;
-				regs.wptr = wptr;
-				spawn_active = spawn_active ? 2 : 1;
-				tp_spawn_mmap_reset();
-				{
-					const char *pmsg = "SPAWN_GO:";
-					while (*pmsg)
-						uart_putc_raw(*pmsg++);
-					uart_debug_hex32(regs.iptr);
-					uart_putc_raw(':');
-					uart_debug_hex32(regs.wptr);
-					uart_putc_raw('\n');
-				}
-				t9k_enter_userspace(regs.iptr, regs.wptr);
-				spawn_active = spawn_active >= 2 ? 1 : 0;
-				return -ENOEXEC;
-			}
-		}
-
-		/*
-		 * Pin the caller's mm before exec: kernel_execve swaps
-		 * current->mm and mmput()s the old one, freeing the CALLER'S
-		 * bFLT image pages while the spawn setjmp still points into
-		 * them.  Once child allocations reuse those pages (deep hush
-		 * init was the first to apply enough pressure) the parent's
-		 * text is zeroed and the post-SPAWN_RET return wild-jumps.
-		 * The extra reference keeps the image resident for the
-		 * lifetime of the system; the same pin also keeps the tp_bb
-		 * cached busybox image valid across later execs.
-		 */
-		if (current->mm)
-			mmget(current->mm);
-		ret = kernel_execve(path,
-				    (const char *const *)argv,
-				    (const char *const *)envp);
-		if (ret < 0) {
-			const char *pmsg = "SPAWN_FAIL:";
-			while (*pmsg)
-				uart_putc_raw(*pmsg++);
-			uart_debug_hex32((unsigned long)ret);
-			uart_putc_raw('\n');
-			return ret;
-		}
-		regs = *current_pt_regs();
-
-		/* Cache busybox image for later /bin/* reenter */
-		if (tp_path_is_bin_applet(path) && current->mm) {
-			tp_bb.valid = 1;
-			tp_bb.entry = regs.iptr;
-			tp_bb.end_brk = current->mm->context.end_brk;
-			tp_bb.start_data = current->mm->start_data;
-			tp_bb.end_data = current->mm->end_data;
-			tp_bb.start_brk = current->mm->start_brk;
-			/*
-			 * Prefer a dedicated 256K stack away from the bFLT
-			 * image so child heap/stack growth and syscall depth
-			 * cannot smash the parent's setjmp workspace.
-			 */
-			if (!tp_bb.stack_base) {
-				unsigned long pgs = __get_free_pages(
-					GFP_KERNEL, TP_BB_STACK_ORDER);
-				if (pgs) {
-					memset((void *)pgs, 0, TP_BB_STACK_SIZE);
-					tp_bb.stack_base = pgs;
-					tp_bb.stack_top = pgs + TP_BB_STACK_SIZE;
-				}
-			}
-			if (!tp_bb.stack_base) {
-				/* Fallback: image-local stack */
-				tp_bb.stack_top =
-					(regs.wptr & ~0xfffUL) + 0x2000UL;
-				if (tp_bb.stack_top < regs.wptr + 256)
-					tp_bb.stack_top = regs.wptr + 0x1000UL;
-			}
-			/*
-			 * Snapshot code+init-data+bss (data_len may be 0 — init
-			 * data lives in the text blob for this busybox bFLT).
-			 */
-			if (!tp_bb.img_snap && current->mm->start_code &&
-			    tp_bb.start_brk > current->mm->start_code) {
-				unsigned long base = current->mm->start_code;
-				unsigned long n = tp_bb.start_brk - base;
-				unsigned int order = 0;
-				if (n > 0 && n < 0x200000UL) {
-					while (order < 12 &&
-					       ((PAGE_SIZE << order) < n))
-						order++;
-					tp_bb.img_snap = (void *)
-						__get_free_pages(GFP_KERNEL, order);
-					if (tp_bb.img_snap) {
-						memcpy(tp_bb.img_snap,
-						       (void *)base, n);
-						tp_bb.img_base = base;
-						tp_bb.img_len = n;
-						tp_bb.img_order = order;
-					}
-				}
-			}
-			{
-				const char *pmsg = "BB_CACHE:";
-				while (*pmsg)
-					uart_putc_raw(*pmsg++);
-				uart_debug_hex32(tp_bb.entry);
-				uart_putc_raw(':');
-				uart_debug_hex32(tp_bb.stack_top);
-				uart_putc_raw(':');
-				uart_debug_hex32(tp_bb.stack_base);
-				uart_putc_raw(':');
-				uart_debug_hex32(tp_bb.img_len);
-				uart_putc_raw('\n');
-			}
-		}
-
-		/* Mark spawn as active so exit() knows to longjmp */
-		spawn_active = spawn_active ? 2 : 1;
-		tp_spawn_mmap_reset();
-
-
-		{
-			const char *p = "SPAWN_GO:";
-			while (*p)
-				uart_putc_raw(*p++);
-			uart_debug_hex32(regs.iptr);
-			uart_putc_raw(':');
-			uart_debug_hex32(regs.wptr);
-			uart_putc_raw('\n');
-		}
-
-		/* Enter child as P-process (goprot) or classic L enter_exec */
-		t9k_enter_userspace(regs.iptr, regs.wptr);
-
-		/* Should never reach here */
-		spawn_active = spawn_active >= 2 ? 1 : 0;
-		return -ENOEXEC;
-	}
-
-	case __NR_tp_hw_spawn: {
-		/*
-		 * Hardware-assisted spawn using T800 STOPP/RUNP.
-		 *
-		 * Nested under an outer soft tp_spawn (init→fbwm→tman/doom):
-		 * STOPP/RUNP resume is unreliable on T4 after kernel_execve, and
-		 * child exit used to longjmp the outer soft context.  Fall back
-		 * to nested soft spawn (spawn_jmpbuf_nest) so auto-demo continues.
-		 */
-		if (spawn_active) {
-			const char *p = "HW_SPAWN_AS_SOFT\n";
-			while (*p)
-				uart_putc_raw(*p++);
-			/* Re-dispatch as soft nested spawn (same args). */
-			return __transputer_syscall(__NR_tp_spawn, a1, a2, a3,
-						    0, 0, 0);
-		}
-
-		{
-			const char *path = (const char *)a1;
-			const char *const *argv = (const char *const *)a2;
-			const char *const *envp = (const char *const *)a3;
-			struct pt_regs regs;
-			int ret;
-
-			{
-				const char *p = "HW_SPAWN:";
-				while (*p) uart_putc_raw(*p++);
-				p = path ? path : "(null)";
-				while (*p) uart_putc_raw(*p++);
-				uart_putc_raw('\n');
-			}
-
-			/* Load the child binary */
-			memset(&regs, 0, sizeof(regs));
-			/* Pin the caller's mm — see the tp_spawn comment above. */
-			if (current->mm)
-				mmget(current->mm);
-			ret = kernel_execve(path,
-					    (const char *const *)argv,
-					    (const char *const *)envp);
-			if (ret < 0)
-				return ret;
-			regs = *current_pt_regs();
-
-			hw_spawn_parent_desc = 0;
-
-			{
-				const char *p = "HW_SPAWN_GO:";
-				while (*p) uart_putc_raw(*p++);
-				uart_debug_hex32(regs.iptr);
-				uart_putc_raw(':');
-				uart_debug_hex32(regs.wptr);
-				uart_putc_raw('\n');
-			}
-
-			/*
-			 * This call:
-			 * 1. Stores child IPtr at child_wptr[-1]
-			 * 2. Saves parent descriptor at hw_spawn_parent_desc
-			 * 3. RUNPs the child (adds to hardware queue)
-			 * 4. STOPPs the parent (suspends — removed from queue)
-			 * 5. When child exits and RUNPs us, we resume here
-			 */
-			__transputer_hw_spawn_parent(regs.wptr, regs.iptr,
-						     &hw_spawn_parent_desc);
-
-			/* We're back! Child has exited. */
-			{
-				const char *p = "HW_SPAWN_DONE\n";
-				while (*p) uart_putc_raw(*p++);
-			}
-			return 0;
-		}
-	}
+	case __NR_tp_spawn:
+	case __NR_tp_hw_spawn:
+		return tp_spawn_with_parent(number, (const char *)a1,
+			(const char *const *)a2, (const char *const *)a3);
 
 	case __NR_wait4:
 		return sys_wait4((pid_t)a1, (int __user *)a2,

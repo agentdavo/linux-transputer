@@ -38,7 +38,6 @@ extern void do_exit(long code);
 #define T9K_PS_SAREG	6
 #define T9K_PS_SBREG	7
 #define T9K_PS_SCREG	8
-#define T9K_PDS_WORDS	11
 #define T9K_NULL_REGION	0x80000000u
 
 /* Provided by t9000_goprot.S — real T9000 encodings (60 FA / 60 F8).
@@ -48,14 +47,6 @@ extern void do_exit(long code);
  * per-target extraction below. */
 int t9k_asm_goprot(unsigned long pds_phys, unsigned long rods_phys);
 void t9k_asm_syscall(void);
-
-/*
- * PDS/RODS staging for hard goprot.  Use static (not percpu) buffers —
- * this_cpu_ptr has been unreliable under TCC for small arrays, and
- * goprot once saw rods_phys=0.
- */
-static u32 soft_pds_buf[T9K_PDS_WORDS];
-static u32 soft_rods_buf[4];
 
 #ifdef CONFIG_TRANSPUTER_SPINE_CHIP
 /*
@@ -531,16 +522,10 @@ int t9k_enter_user_p(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 	if (!mm || !(mm->flags & T9K_SOFT_FL_ACTIVE))
 		return -EINVAL;
 
-	pds = soft_pds_buf;
-	rods = soft_rods_buf;
+	pds = mm->pds;
+	rods = mm->rods_cache;
 	t9k_soft_fill_rods(mm, rods);
-	{
-		int i;
-		for (i = 0; i < 4; i++)
-			mm->rods_cache[i] = rods[i];
-	}
 	fill_pds(pds, entry, wsp);
-	mm->pds_phys = (u32)(unsigned long)pds;
 
 	/*
 	 * Hard path: real goprot (T4 emulated).  On return, PDS.cntl low 16
@@ -585,19 +570,13 @@ int t9k_run_user_until_exit(struct t9k_soft_mm *mm, u32 entry, u32 wsp)
 	if (!mm || !(mm->flags & T9K_SOFT_FL_ACTIVE))
 		return -EINVAL;
 
-	pds = soft_pds_buf;
-	rods = soft_rods_buf;
+	pds = mm->pds;
+	rods = mm->rods_cache;
 	t9k_soft_fill_rods(mm, rods);
-	{
-		int i;
-		for (i = 0; i < 4; i++)
-			mm->rods_cache[i] = rods[i];
-	}
 	fill_pds(pds, entry, wsp);
 #ifndef CONFIG_TRANSPUTER_SPINE_CHIP
 	pds[0] = 0; /* CNTL (T4 cause slot; SPINE keeps fill_pds's control word) */
 #endif
-	mm->pds_phys = (u32)(unsigned long)pds;
 #ifndef CONFIG_TRANSPUTER_SPINE_CHIP
 	/* Leave P if a prior C-call left is_p set — goprot must start from L.
 	 * (T4 MMIO backdoor; the RTL always reverts to L on a P-trap.) */
@@ -855,7 +834,6 @@ void t9k_on_exec_finish(struct pt_regs *regs)
 
 	/* Cache RODS words for hard-path / scheduler re-install. */
 	t9k_soft_fill_rods(mm, mm->rods_cache);
-	mm->pds_phys = 0;
 
 	/* Keep userspace hard_p flag in sync (publish may run before parse). */
 	*(volatile u32 *)0x80000064u = t9k_hard_p ? 1u : 0u;
