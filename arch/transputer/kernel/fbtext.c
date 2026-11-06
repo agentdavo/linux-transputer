@@ -37,8 +37,8 @@ static const u32 fbt_nib[16][4] = {
 /*
  * The boot spends most of its console time here, so both loops are written
  * for the transputer: eight word stores a pass through a pointer, and a
- * glyph row as two table lookups and eight copies, with no per-pixel shift,
- * test or branch.  No MOVE, which is multi-cycle on the RTL.
+ * nonblank glyph row as two table lookups and eight copies, with no
+ * per-pixel shift, test or branch.  No MOVE, which is multi-cycle on the RTL.
  */
 static void fbt_clear_row(int row)
 {
@@ -55,18 +55,26 @@ static void fbt_clear_row(int row)
 static void fbt_glyph(int col, int row, unsigned char c)
 {
 	volatile u32 *p;
-	const unsigned char *g;
-	unsigned int y;
+	const unsigned char *g, *end;
 
 	if (c < 32 || c > 126)
 		c = ' ';
 	g = fbtext_font[c - 32];
 	p = (volatile u32 *)TRANSPUTER_FB_BASE +
 	    (u32)row * 16u * TRANSPUTER_FB_WIDTH + (u32)col * 8u;
-	for (y = 0; y < 16; y++, p += TRANSPUTER_FB_WIDTH) {
-		const u32 *hi = fbt_nib[g[y] >> 4];
-		const u32 *lo = fbt_nib[g[y] & 15];
+	end = g + 16;
+	for (; g != end; p += TRANSPUTER_FB_WIDTH) {
+		unsigned int bits = *g++;
+		const u32 *hi, *lo;
 
+		if (!bits) {
+			p[0] = FBT_BG; p[1] = FBT_BG; p[2] = FBT_BG; p[3] = FBT_BG;
+			p[4] = FBT_BG; p[5] = FBT_BG; p[6] = FBT_BG; p[7] = FBT_BG;
+			continue;
+		}
+
+		hi = fbt_nib[bits >> 4];
+		lo = fbt_nib[bits & 15];
 		p[0] = hi[0]; p[1] = hi[1]; p[2] = hi[2]; p[3] = hi[3];
 		p[4] = lo[0]; p[5] = lo[1]; p[6] = lo[2]; p[7] = lo[3];
 	}
