@@ -13,14 +13,26 @@
 #include <linux/string.h>
 #include <linux/unaligned.h>
 
+#ifdef __TCC_TRANSPUTER_ROTATE32__
+#define rol32(word, shift)	__builtin_rotateleft32((word), (shift))
+#endif
+
 static void chacha_permute(struct chacha_state *state, int nrounds)
 {
+#ifdef __TCC_TRANSPUTER_ROTATE32__
+	u32 x[16];
+#else
 	u32 *x = state->x;
+#endif
 	int i;
 
 	/* whitelist the allowed round counts */
 	WARN_ON_ONCE(nrounds != 20 && nrounds != 12);
 
+#ifdef __TCC_TRANSPUTER_ROTATE32__
+	/* Constant indices into a local array use workspace word offsets. */
+	__move(x, state->x, sizeof(x));
+#endif
 	for (i = 0; i < nrounds; i += 2) {
 		x[0]  += x[4];    x[12] = rol32(x[12] ^ x[0],  16);
 		x[1]  += x[5];    x[13] = rol32(x[13] ^ x[1],  16);
@@ -62,6 +74,10 @@ static void chacha_permute(struct chacha_state *state, int nrounds)
 		x[8]  += x[13];   x[7]  = rol32(x[7]  ^ x[8],   7);
 		x[9]  += x[14];   x[4]  = rol32(x[4]  ^ x[9],   7);
 	}
+#ifdef __TCC_TRANSPUTER_ROTATE32__
+	__move(state->x, x, sizeof(x));
+	memzero_explicit(x, sizeof(x));
+#endif
 }
 
 /**

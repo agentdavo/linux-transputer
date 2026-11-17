@@ -289,6 +289,7 @@ int irq_startup(struct irq_desc *desc, bool resend, bool force)
 			if (!(d->chip->flags & IRQCHIP_AFFINITY_PRE_STARTUP))
 				irq_setup_affinity(desc);
 			break;
+#ifdef CONFIG_SMP
 		case IRQ_STARTUP_MANAGED:
 			irq_do_set_affinity(d, aff, false);
 			ret = __irq_startup(desc);
@@ -297,6 +298,7 @@ int irq_startup(struct irq_desc *desc, bool resend, bool force)
 			desc->depth = 1;
 			irqd_set_managed_shutdown(d);
 			return 0;
+#endif
 		}
 	}
 	if (resend)

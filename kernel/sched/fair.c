@@ -9538,6 +9538,7 @@ unsigned long sched_cpu_util(int cpu)
 	return effective_cpu_util(cpu, cpu_util_cfs(cpu), NULL, NULL);
 }
 
+#if defined(CONFIG_ENERGY_MODEL) && defined(CONFIG_CPU_FREQ_GOV_SCHEDUTIL)
 /*
  * energy_env - Utilization landscape for energy estimation.
  * @task_busy_time: Utilization contribution by the task for which we test the
@@ -9899,6 +9900,12 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu)
 
 	return target;
 }
+#else
+static inline int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu)
+{
+	return -1;
+}
+#endif
 
 /*
  * select_task_rq_fair: Select target runqueue for the waking task in domains

@@ -162,7 +162,14 @@ sysmap_and_kallsyms()
 mksysmap()
 {
 	info SYSMAP ${2}
-	scripts/kallsyms --sysmap="${2}" "${1}"
+	if is_enabled CONFIG_TRANSPUTER; then
+		# The Transputer linker writes vmlinux without section headers,
+		# which kallsyms cannot read; its symbols are in the .tccsym
+		# sidecar that the tcc nm wrapper emits.
+		${NM} -n "${1}" | sed -f "${srctree}/arch/transputer/tools/mksysmap" > "${2}"
+	else
+		scripts/kallsyms --sysmap="${2}" "${1}"
+	fi
 }
 
 sorttable()

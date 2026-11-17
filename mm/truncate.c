@@ -76,6 +76,7 @@ static void truncate_folio_batch_exceptionals(struct address_space *mapping,
 	if (j == nr)
 		return;
 
+#if IS_ENABLED(CONFIG_FS_DAX)
 	if (dax_mapping(mapping)) {
 		for (i = j; i < nr; i++) {
 			if (xa_is_value(fbatch->folios[i])) {
@@ -97,6 +98,7 @@ static void truncate_folio_batch_exceptionals(struct address_space *mapping,
 		}
 		goto out;
 	}
+#endif
 
 	xas_set(&xas, indices[j]);
 	xas_set_update(&xas, workingset_update_node);
@@ -113,7 +115,9 @@ static void truncate_folio_batch_exceptionals(struct address_space *mapping,
 	if (mapping_shrinkable(mapping))
 		inode_lru_list_add(mapping->host);
 	spin_unlock(&mapping->host->i_lock);
+#if IS_ENABLED(CONFIG_FS_DAX)
 out:
+#endif
 	folio_batch_remove_exceptionals(fbatch);
 }
 
