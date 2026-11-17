@@ -137,9 +137,20 @@ static void fbt_glyph(int col, int row, unsigned char c)
 
 	if (c < 32 || c > 126)
 		c = ' ';
-	g = fbtext_font[c - 32];
 	p = (volatile u32 *)TRANSPUTER_FB_BASE +
 	    (u32)row * 16u * TRANSPUTER_FB_WIDTH + (u32)col * 8u;
+	if (c == ' ') {
+		volatile u32 *bottom = p + 16u * TRANSPUTER_FB_WIDTH;
+
+		/* The space glyph is blank on every scanline. */
+		do {
+			p[0] = FBT_BG; p[1] = FBT_BG; p[2] = FBT_BG; p[3] = FBT_BG;
+			p[4] = FBT_BG; p[5] = FBT_BG; p[6] = FBT_BG; p[7] = FBT_BG;
+			p += TRANSPUTER_FB_WIDTH;
+		} while (p != bottom);
+		return;
+	}
+	g = fbtext_font[c - 32];
 	end = g + 16;
 	for (; g != end; p += TRANSPUTER_FB_WIDTH) {
 		unsigned int bits = *g++;

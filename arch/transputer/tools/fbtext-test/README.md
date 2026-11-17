@@ -58,3 +58,24 @@ so the fixed stream above supplies the paired performance comparison.
 Final BTL SHA-256 is
 `1979cb56faac295ef3a08da1a692cbe2097a2662ab29aa0016e60b0e5fa4f6ed`.
 The compiler binary is the retained TinyCC `f2ac20b4` validation build.
+
+## Whole-space glyph fast path
+
+The space glyph now clears its eight by sixteen rectangle directly,
+without loading font bytes or testing each scanline. Invalid input bytes
+still map to that same space glyph.
+
+| Fixed stream, glyph routine | Byte table | Space fast path | Reduction |
+| --- | ---: | ---: | ---: |
+| Decoded instructions | 3,728,239 | 3,696,179 | 0.86% |
+| Modeled T800 cycles | 7,877,212 | 7,823,790 | 0.68% |
+
+The pixel oracle passes with the same three hashes and captured BMP hash
+above. The rebuilt BTL reaches `DESKTOP_LOOP` with hard-P enabled and the
+protection self-test passing. Its actual SPINE framebuffer is byte-identical
+to the previous desktop capture. The boot profile records 3,928,540 glyph
+instructions; use the fixed stream for the paired performance comparison.
+The strict linker again checks 81,427 call relocations with zero mismatches.
+
+Space-fast-path BTL SHA-256 is
+`305ccfac2049021c2dfd223ae63ab53c910c12fdfbc534db2a86a5a7a81fc93f`.
