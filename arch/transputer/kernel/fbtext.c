@@ -96,24 +96,19 @@ static const u32 fbt_pixels[256][8] = {
 	FBT_PIXELS(0xfc), FBT_PIXELS(0xfd), FBT_PIXELS(0xfe), FBT_PIXELS(0xff),
 };
 
-/* STNL offsets 0 through 15 fit in one instruction byte. */
-#define FBT_CLEAR_16(p) do { \
-	(p)[0] = FBT_BG; \
-	(p)[1] = FBT_BG; \
-	(p)[2] = FBT_BG; \
-	(p)[3] = FBT_BG; \
-	(p)[4] = FBT_BG; \
-	(p)[5] = FBT_BG; \
-	(p)[6] = FBT_BG; \
-	(p)[7] = FBT_BG; \
-	(p)[8] = FBT_BG; \
-	(p)[9] = FBT_BG; \
-	(p)[10] = FBT_BG; \
-	(p)[11] = FBT_BG; \
-	(p)[12] = FBT_BG; \
-	(p)[13] = FBT_BG; \
-	(p)[14] = FBT_BG; \
-	(p)[15] = FBT_BG; \
+/* Both the store offsets and the pointer advances fit in one byte. */
+#define FBT_CLEAR_5(p, n) do { \
+	(p)[(n) + 0] = FBT_BG; \
+	(p)[(n) + 1] = FBT_BG; \
+	(p)[(n) + 2] = FBT_BG; \
+	(p)[(n) + 3] = FBT_BG; \
+	(p)[(n) + 4] = FBT_BG; \
+} while (0)
+
+#define FBT_CLEAR_15(p) do { \
+	FBT_CLEAR_5(p, 0); \
+	FBT_CLEAR_5(p, 5); \
+	FBT_CLEAR_5(p, 10); \
 } while (0)
 
 static void fbt_clear_row(int row)
@@ -122,30 +117,38 @@ static void fbt_clear_row(int row)
 		 (u32)row * 16u * TRANSPUTER_FB_WIDTH;
 	u32 *end = p + 16u * TRANSPUTER_FB_WIDTH;
 
-	BUILD_BUG_ON((16u * TRANSPUTER_FB_WIDTH) % 128);
+	BUILD_BUG_ON((16u * TRANSPUTER_FB_WIDTH) % 160);
 
-	/* Advance the base every 16 stores and branch every 128 pixels. */
+	/* Ten 15-pixel groups and a 10-pixel tail per branch. */
 	do {
-		FBT_CLEAR_16(p);
-		p += 16;
-		FBT_CLEAR_16(p);
-		p += 16;
-		FBT_CLEAR_16(p);
-		p += 16;
-		FBT_CLEAR_16(p);
-		p += 16;
-		FBT_CLEAR_16(p);
-		p += 16;
-		FBT_CLEAR_16(p);
-		p += 16;
-		FBT_CLEAR_16(p);
-		p += 16;
-		FBT_CLEAR_16(p);
-		p += 16;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_15(p);
+		p += 15;
+		FBT_CLEAR_5(p, 0);
+		FBT_CLEAR_5(p, 5);
+		p += 10;
 	} while (p != end);
 }
 
-#undef FBT_CLEAR_16
+#undef FBT_CLEAR_15
+#undef FBT_CLEAR_5
 
 static void fbt_glyph(int col, int row, unsigned char c)
 {

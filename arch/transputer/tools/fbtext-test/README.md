@@ -104,3 +104,26 @@ byte for byte, with the same desktop SHA-256 recorded above.
 
 Row-clear BTL SHA-256:
 `21ea616ac97a5fb69bf01588e5d0dc6314b3c05ba510f449edab84cc489dbc86`.
+
+## Short pointer advances for row clearing
+
+STNL leaves only one live integer stack entry. Two assembly prototypes
+kept either the pointer or the fill value across stores and passed the
+pixel oracle. Including their call wrappers, they took 8,338,260 and
+8,539,944 modeled cycles respectively. The pointer prototype cut
+workspace loads and stores from 1,226,736 to 67,620, but stack shuffling
+and the shorter loop body made it slower.
+
+In the C loop, 15-pixel groups and a 10-pixel tail keep both the stores
+and pointer advances within single-byte encodings. Each loop branch
+covers 160 pixels. The fixed stream takes 5,763,408 modeled row-clear
+cycles, down 1.07% from 5,825,568. The boot profile records 8,645,112
+cycles, down from 8,738,352 across the same 126 row clears.
+
+The pixel oracle and the T4 desktop capture match the previous build
+byte for byte. The BTL reaches `DESKTOP_LOOP` with hard-P enabled.
+The protection self-test and BusyBox directory listing checks pass.
+The linker checks 81,401 call relocations with zero mismatches.
+
+BTL SHA-256:
+`af4e94010ae7517425c70014f57631391ff6541076b4dca809d1f335dface918`.
