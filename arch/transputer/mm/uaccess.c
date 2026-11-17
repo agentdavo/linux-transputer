@@ -6,6 +6,8 @@
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/sched.h>
+#include <linux/fault-inject-usercopy.h>
+#include <linux/kasan-checks.h>
 #include <asm/t9000_softprot.h>
 #include <asm/current.h>
 
@@ -33,3 +35,55 @@ unsigned long raw_copy_to_user(void __user *to, const void *from, unsigned long 
 	return 0;
 }
 EXPORT_SYMBOL(raw_copy_to_user);
+
+/*
+ * A short string may end just before a soft region or private allocation
+ * boundary. Check each byte as it is read: checking the caller's entire
+ * maximum length would reject a valid NUL-terminated pathname there.
+ */
+long strncpy_from_user(char *dst, const char __user *src, long count)
+{
+	unsigned long start = (unsigned long)src;
+	long i;
+
+	might_fault();
+	if (should_fail_usercopy())
+		return -EFAULT;
+	if (count <= 0)
+		return 0;
+	kasan_check_write(dst, count);
+	check_object_size(dst, count, false);
+
+	for (i = 0; i < count; i++) {
+		unsigned long addr = start + i;
+		char c;
+
+		if (addr < start || get_user(c, (const char __user *)addr))
+			return -EFAULT;
+		dst[i] = c;
+		if (!c)
+			return i;
+	}
+	return count;
+}
+EXPORT_SYMBOL(strncpy_from_user);
+
+long strnlen_user(const char __user *src, long count)
+{
+	unsigned long start = (unsigned long)src;
+	long i;
+
+	if (count <= 0)
+		return 0;
+	for (i = 0; i < count; i++) {
+		unsigned long addr = start + i;
+		char c;
+
+		if (addr < start || get_user(c, (const char __user *)addr))
+			return 0;
+		if (!c)
+			return i + 1;
+	}
+	return (unsigned long)count + 1;
+}
+EXPORT_SYMBOL(strnlen_user);

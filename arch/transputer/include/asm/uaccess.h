@@ -37,17 +37,6 @@ static inline void *__t9k_uptr(const void __user *ptr)
 	return (void *)(unsigned long)ptr;
 }
 
-static inline long __transputer_strnlen_user(const char __user *s, long n)
-{
-	const char *p = (const char *)__t9k_uptr(s);
-	long len = strnlen(p, n);
-
-	if (len < n)
-		len++;
-	return len;
-}
-#define __strnlen_user __transputer_strnlen_user
-
 #define access_ok(addr, size) __t9k_access_ok((unsigned long)(addr), (size))
 
 /* Prefer our translating get/put over UACCESS_MEMCPY identity stores. */
