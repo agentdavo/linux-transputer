@@ -79,3 +79,28 @@ The strict linker again checks 81,427 call relocations with zero mismatches.
 
 Space-fast-path BTL SHA-256 is
 `305ccfac2049021c2dfd223ae63ab53c910c12fdfbc534db2a86a5a7a81fc93f`.
+
+## Short store offsets for row clearing
+
+Advance the framebuffer pointer every 16 pixels so each word store uses
+a single-byte STNL encoding. Eight groups share one loop branch.
+
+| Fixed stream, row-clear routine | Previous | Short offsets | Change |
+| --- | ---: | ---: | ---: |
+| Decoded instructions | 3,361,176 | 3,470,376 | +3.25% |
+| Modeled T800 cycles | 6,472,368 | 5,825,568 | −9.99% |
+| Pixel stores | 1,075,200 | 1,075,200 | 0% |
+
+The fixed stream clears 84 rows and passes the pixel oracle with the
+same hashes and BMP as before. In boot profiles through `DESKTOP_LOOP`,
+both images clear 126 rows and the routine drops from 9,708,552 to
+8,738,352 modeled cycles. The BTL remains 5,480,872 bytes.
+
+The rebuilt `tpos_defconfig` BTL passes the protection self-test under
+T4 `-s806 -sm 25` with hard-P enabled. All three BusyBox directory
+listing checks pass. The link audit checks 81,401 call relocations with zero
+mismatches. The captured desktop XRGB buffer matches the previous kernel
+byte for byte, with the same desktop SHA-256 recorded above.
+
+Row-clear BTL SHA-256:
+`21ea616ac97a5fb69bf01588e5d0dc6314b3c05ba510f449edab84cc489dbc86`.

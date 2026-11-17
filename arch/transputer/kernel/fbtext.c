@@ -96,39 +96,56 @@ static const u32 fbt_pixels[256][8] = {
 	FBT_PIXELS(0xfc), FBT_PIXELS(0xfd), FBT_PIXELS(0xfe), FBT_PIXELS(0xff),
 };
 
-/*
- * The boot spends most of its console time here, so both loops are written
- * for the transputer: sixty-four word stores a pass through a pointer, and a
- * nonblank glyph row as one table lookup and eight copies, with no
- * per-pixel shift, test or branch.  No MOVE, which is multi-cycle on the RTL.
- */
+/* STNL offsets 0 through 15 fit in one instruction byte. */
+#define FBT_CLEAR_16(p) do { \
+	(p)[0] = FBT_BG; \
+	(p)[1] = FBT_BG; \
+	(p)[2] = FBT_BG; \
+	(p)[3] = FBT_BG; \
+	(p)[4] = FBT_BG; \
+	(p)[5] = FBT_BG; \
+	(p)[6] = FBT_BG; \
+	(p)[7] = FBT_BG; \
+	(p)[8] = FBT_BG; \
+	(p)[9] = FBT_BG; \
+	(p)[10] = FBT_BG; \
+	(p)[11] = FBT_BG; \
+	(p)[12] = FBT_BG; \
+	(p)[13] = FBT_BG; \
+	(p)[14] = FBT_BG; \
+	(p)[15] = FBT_BG; \
+} while (0)
+
 static void fbt_clear_row(int row)
 {
 	u32 *p = (u32 *)TRANSPUTER_FB_BASE +
 		 (u32)row * 16u * TRANSPUTER_FB_WIDTH;
 	u32 *end = p + 16u * TRANSPUTER_FB_WIDTH;
 
-	/* A text row is 16 scanlines, divisible by 64 words on both profiles. */
+	BUILD_BUG_ON((16u * TRANSPUTER_FB_WIDTH) % 128);
+
+	/* Advance the base every 16 stores and branch every 128 pixels. */
 	do {
-		p[0] = FBT_BG; p[1] = FBT_BG; p[2] = FBT_BG; p[3] = FBT_BG;
-		p[4] = FBT_BG; p[5] = FBT_BG; p[6] = FBT_BG; p[7] = FBT_BG;
-		p[8] = FBT_BG; p[9] = FBT_BG; p[10] = FBT_BG; p[11] = FBT_BG;
-		p[12] = FBT_BG; p[13] = FBT_BG; p[14] = FBT_BG; p[15] = FBT_BG;
-		p[16] = FBT_BG; p[17] = FBT_BG; p[18] = FBT_BG; p[19] = FBT_BG;
-		p[20] = FBT_BG; p[21] = FBT_BG; p[22] = FBT_BG; p[23] = FBT_BG;
-		p[24] = FBT_BG; p[25] = FBT_BG; p[26] = FBT_BG; p[27] = FBT_BG;
-		p[28] = FBT_BG; p[29] = FBT_BG; p[30] = FBT_BG; p[31] = FBT_BG;
-		p[32] = FBT_BG; p[33] = FBT_BG; p[34] = FBT_BG; p[35] = FBT_BG;
-		p[36] = FBT_BG; p[37] = FBT_BG; p[38] = FBT_BG; p[39] = FBT_BG;
-		p[40] = FBT_BG; p[41] = FBT_BG; p[42] = FBT_BG; p[43] = FBT_BG;
-		p[44] = FBT_BG; p[45] = FBT_BG; p[46] = FBT_BG; p[47] = FBT_BG;
-		p[48] = FBT_BG; p[49] = FBT_BG; p[50] = FBT_BG; p[51] = FBT_BG;
-		p[52] = FBT_BG; p[53] = FBT_BG; p[54] = FBT_BG; p[55] = FBT_BG;
-		p[56] = FBT_BG; p[57] = FBT_BG; p[58] = FBT_BG; p[59] = FBT_BG;
-		p[60] = FBT_BG; p[61] = FBT_BG; p[62] = FBT_BG; p[63] = FBT_BG;
-		p += 64;
+		FBT_CLEAR_16(p);
+		p += 16;
+		FBT_CLEAR_16(p);
+		p += 16;
+		FBT_CLEAR_16(p);
+		p += 16;
+		FBT_CLEAR_16(p);
+		p += 16;
+		FBT_CLEAR_16(p);
+		p += 16;
+		FBT_CLEAR_16(p);
+		p += 16;
+		FBT_CLEAR_16(p);
+		p += 16;
+		FBT_CLEAR_16(p);
+		p += 16;
 	} while (p != end);
 }
+
+#undef FBT_CLEAR_16
 
 static void fbt_glyph(int col, int row, unsigned char c)
 {
