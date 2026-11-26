@@ -673,6 +673,7 @@ struct sk_buff *xdp_build_skb_from_buff(const struct xdp_buff *xdp)
 }
 EXPORT_SYMBOL_GPL(xdp_build_skb_from_buff);
 
+#ifdef CONFIG_PAGE_POOL
 /**
  * xdp_copy_frags_from_zc - copy frags from XSk buff to skb
  * @skb: skb to copy frags to
@@ -722,6 +723,7 @@ static noinline bool xdp_copy_frags_from_zc(struct sk_buff *skb,
 
 	return true;
 }
+#endif
 
 /**
  * xdp_build_skb_from_zc - create an skb from XSk &xdp_buff
@@ -738,6 +740,7 @@ static noinline bool xdp_copy_frags_from_zc(struct sk_buff *skb,
  */
 struct sk_buff *xdp_build_skb_from_zc(struct xdp_buff *xdp)
 {
+#ifdef CONFIG_PAGE_POOL
 	const struct xdp_rxq_info *rxq = xdp->rxq;
 	u32 len = xdp->data_end - xdp->data_meta;
 	u32 truesize = xdp->frame_sz;
@@ -745,9 +748,6 @@ struct sk_buff *xdp_build_skb_from_zc(struct xdp_buff *xdp)
 	struct page_pool *pp;
 	int metalen;
 	void *data;
-
-	if (!IS_ENABLED(CONFIG_PAGE_POOL))
-		return NULL;
 
 	local_lock_nested_bh(&system_page_pool.bh_lock);
 	pp = this_cpu_read(system_page_pool.pool);
@@ -788,6 +788,9 @@ struct sk_buff *xdp_build_skb_from_zc(struct xdp_buff *xdp)
 out:
 	local_unlock_nested_bh(&system_page_pool.bh_lock);
 	return skb;
+#else
+	return NULL;
+#endif
 }
 EXPORT_SYMBOL_GPL(xdp_build_skb_from_zc);
 

@@ -1,0 +1,89 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Transputer user space access — LA→phys when soft-mm SPLIT is ACTIVE.
+ */
+#include <linux/module.h>
+#include <linux/uaccess.h>
+#include <linux/string.h>
+#include <linux/sched.h>
+#include <linux/fault-inject-usercopy.h>
+#include <linux/kasan-checks.h>
+#include <asm/tp_softprot.h>
+#include <asm/current.h>
+
+static inline void *tp_user_ptr(const void __user *from)
+{
+	struct tp_soft_mm *mm = tp_task_soft_mm(current);
+	u32 la = (u32)(unsigned long)from;
+
+	if (mm && (mm->flags & TP_SOFT_FL_ACTIVE) &&
+	    (mm->flags & TP_SOFT_FL_SPLIT))
+		return (void *)(unsigned long)tp_la_to_phys(mm, la);
+	return (void *)(unsigned long)from;
+}
+
+unsigned long raw_copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	memcpy(to, tp_user_ptr(from), n);
+	return 0;
+}
+EXPORT_SYMBOL(raw_copy_from_user);
+
+unsigned long raw_copy_to_user(void __user *to, const void *from, unsigned long n)
+{
+	memcpy(tp_user_ptr(to), from, n);
+	return 0;
+}
+EXPORT_SYMBOL(raw_copy_to_user);
+
+/*
+ * A short string may end just before a soft region or private allocation
+ * boundary. Check each byte as it is read: checking the caller's entire
+ * maximum length would reject a valid NUL-terminated pathname there.
+ */
+long strncpy_from_user(char *dst, const char __user *src, long count)
+{
+	unsigned long start = (unsigned long)src;
+	long i;
+
+	might_fault();
+	if (should_fail_usercopy())
+		return -EFAULT;
+	if (count <= 0)
+		return 0;
+	kasan_check_write(dst, count);
+	check_object_size(dst, count, false);
+
+	for (i = 0; i < count; i++) {
+		unsigned long addr = start + i;
+		char c;
+
+		if (addr < start || get_user(c, (const char __user *)addr))
+			return -EFAULT;
+		dst[i] = c;
+		if (!c)
+			return i;
+	}
+	return count;
+}
+EXPORT_SYMBOL(strncpy_from_user);
+
+long strnlen_user(const char __user *src, long count)
+{
+	unsigned long start = (unsigned long)src;
+	long i;
+
+	if (count <= 0)
+		return 0;
+	for (i = 0; i < count; i++) {
+		unsigned long addr = start + i;
+		char c;
+
+		if (addr < start || get_user(c, (const char __user *)addr))
+			return 0;
+		if (!c)
+			return i + 1;
+	}
+	return (unsigned long)count + 1;
+}
+EXPORT_SYMBOL(strnlen_user);

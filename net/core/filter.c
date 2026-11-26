@@ -5541,6 +5541,7 @@ static int sol_socket_sockopt(struct sock *sk, int optname,
 			     KERNEL_SOCKPTR(optval), *optlen);
 }
 
+#ifdef CONFIG_INET
 static int bpf_sol_tcp_getsockopt(struct sock *sk, int optname,
 				  char *optval, int optlen)
 {
@@ -5773,7 +5774,9 @@ static int sol_ip_sockopt(struct sock *sk, int optname,
 	return do_ip_setsockopt(sk, SOL_IP, optname,
 				KERNEL_SOCKPTR(optval), *optlen);
 }
+#endif /* CONFIG_INET */
 
+#if IS_ENABLED(CONFIG_IPV6)
 static int sol_ipv6_sockopt(struct sock *sk, int optname,
 			    char *optval, int *optlen,
 			    bool getopt)
@@ -5800,6 +5803,7 @@ static int sol_ipv6_sockopt(struct sock *sk, int optname,
 	return do_ipv6_setsockopt(sk, SOL_IPV6, optname,
 				  KERNEL_SOCKPTR(optval), *optlen);
 }
+#endif
 
 static int __bpf_setsockopt(struct sock *sk, int level, int optname,
 			    char *optval, int optlen)
@@ -5809,12 +5813,18 @@ static int __bpf_setsockopt(struct sock *sk, int level, int optname,
 
 	if (level == SOL_SOCKET)
 		return sol_socket_sockopt(sk, optname, optval, &optlen, false);
-	else if (IS_ENABLED(CONFIG_INET) && level == SOL_IP)
+#ifdef CONFIG_INET
+	else if (level == SOL_IP)
 		return sol_ip_sockopt(sk, optname, optval, &optlen, false);
-	else if (IS_ENABLED(CONFIG_IPV6) && level == SOL_IPV6)
+#endif
+#if IS_ENABLED(CONFIG_IPV6)
+	else if (level == SOL_IPV6)
 		return sol_ipv6_sockopt(sk, optname, optval, &optlen, false);
-	else if (IS_ENABLED(CONFIG_INET) && level == SOL_TCP)
+#endif
+#ifdef CONFIG_INET
+	else if (level == SOL_TCP)
 		return sol_tcp_sockopt(sk, optname, optval, &optlen, false);
+#endif
 
 	return -EINVAL;
 }
@@ -5844,12 +5854,16 @@ static int __bpf_getsockopt(struct sock *sk, int level, int optname,
 
 	if (level == SOL_SOCKET)
 		err = sol_socket_sockopt(sk, optname, optval, &optlen, true);
-	else if (IS_ENABLED(CONFIG_INET) && level == SOL_TCP)
+#ifdef CONFIG_INET
+	else if (level == SOL_TCP)
 		err = sol_tcp_sockopt(sk, optname, optval, &optlen, true);
-	else if (IS_ENABLED(CONFIG_INET) && level == SOL_IP)
+	else if (level == SOL_IP)
 		err = sol_ip_sockopt(sk, optname, optval, &optlen, true);
-	else if (IS_ENABLED(CONFIG_IPV6) && level == SOL_IPV6)
+#endif
+#if IS_ENABLED(CONFIG_IPV6)
+	else if (level == SOL_IPV6)
 		err = sol_ipv6_sockopt(sk, optname, optval, &optlen, true);
+#endif
 	else
 		err = -EINVAL;
 

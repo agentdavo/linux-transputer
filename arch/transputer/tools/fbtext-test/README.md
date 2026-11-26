@@ -1,0 +1,129 @@
+# Framebuffer glyph validation
+
+The bare-metal test links the actual kernel `fbtext.o` and compares its
+output with a separate renderer that evaluates individual font bits.
+It expects the unified configuration with an 800 by 600 XRGB framebuffer at
+`0x81000000`. Reference pixels use scratch memory at `0x81400000`.
+
+The test sends all 256 byte inputs, 4,107 printable characters, and forty
+groups of newline, carriage return, invalid characters and printable text.
+It checks every pixel after each phase, including cursor wraparound,
+untouched scanlines and adjacent memory canaries. It copies the final
+framebuffer to the emulator's capture window so the emulator can save a BMP.
+
+From a TinyCC Transputer workspace, build and run with its toolchain and a
+kernel build directory containing the configured `fbtext.o`.
+
+```sh
+bash transputer/linux-7/arch/transputer/tools/fbtext-test/build.sh \
+    "$PWD" /path/to/kernel-build /path/to/test-output
+cd /path/to/test-output
+TP_HEADLESS=1 TP_UART_LOG=uart \
+    /path/to/tpemu -stp32x -sm 25 -ss -sb test.btl
+```
+
+`TCC_BIN` and `NETLOAD_BIN` may select frozen tool binaries. The test prints
+`GLYPHS PASS`, followed by the bootstrap's `H` marker. The three pixel hashes
+are `2cdf0dc5`, `f9848145`, and `8347d445`.
+
+## Measurement on 17 November 2026
+
+A single lookup of a font byte replaces the two nibble lookups for each
+nonblank glyph row. The blank-row stores retain their fast path.
+
+| Fixed stream, glyph routine | Baseline | Byte table | Reduction |
+| --- | ---: | ---: | ---: |
+| Decoded instructions | 4,180,300 | 3,728,239 | 10.8% |
+| Modeled TP32 cycles | 8,794,737 | 7,877,212 | 10.4% |
+| Workspace loads, stores and address loads | 1,912,916 | 1,702,549 | 11.0% |
+
+Both kernel objects pass the pixel oracle, and their captured BMPs match
+byte for byte with SHA-256
+`a37fb82fc6b075689ade9237470f1b906a6723b498edd19075b7430147e78c45`.
+The lookup table grows from 256 to 8,192 bytes. The linked BTL grows by
+8,224 bytes.
+
+The rebuilt Linux image passes the protection self-test and reaches
+`DESKTOP_LOOP` under emulator `-stp32 -sm 25` with hard-P enabled. Its strict link
+has zero undefined symbols and the call audit checks 81,427 relocations with
+zero mismatches. The three existing modpost section-mismatch warnings persist.
+The actual unified framebuffer was captured from the task-owned emulator's
+RAM at desktop entry. Baseline and final 800 by 600 XRGB buffers are
+byte-identical with SHA-256
+`0859bf0f8ef7b7fa269f0d67644dbb77f6f57f5fa8aca5967ff782c9c1ac616e`.
+The boot profile records 4,000,269 glyph instructions, compared with
+4,423,005 in the baseline. Timing-related console text varies between boots,
+so the fixed stream above supplies the paired performance comparison.
+
+Final BTL SHA-256 is
+`1979cb56faac295ef3a08da1a692cbe2097a2662ab29aa0016e60b0e5fa4f6ed`.
+The compiler binary is the retained TinyCC `f2ac20b4` validation build.
+
+## Whole-space glyph fast path
+
+The space glyph now clears its eight by sixteen rectangle directly,
+without loading font bytes or testing each scanline. Invalid input bytes
+still map to that same space glyph.
+
+| Fixed stream, glyph routine | Byte table | Space fast path | Reduction |
+| --- | ---: | ---: | ---: |
+| Decoded instructions | 3,728,239 | 3,696,179 | 0.86% |
+| Modeled TP32 cycles | 7,877,212 | 7,823,790 | 0.68% |
+
+The pixel oracle passes with the same three hashes and captured BMP hash
+above. The rebuilt BTL reaches `DESKTOP_LOOP` with hard-P enabled and the
+protection self-test passing. Its actual unified framebuffer is byte-identical
+to the previous desktop capture. The boot profile records 3,928,540 glyph
+instructions; use the fixed stream for the paired performance comparison.
+The strict linker again checks 81,427 call relocations with zero mismatches.
+
+Space-fast-path BTL SHA-256 is
+`305ccfac2049021c2dfd223ae63ab53c910c12fdfbc534db2a86a5a7a81fc93f`.
+
+## Short store offsets for row clearing
+
+Advance the framebuffer pointer every 16 pixels so each word store uses
+a single-byte STNL encoding. Eight groups share one loop branch.
+
+| Fixed stream, row-clear routine | Previous | Short offsets | Change |
+| --- | ---: | ---: | ---: |
+| Decoded instructions | 3,361,176 | 3,470,376 | +3.25% |
+| Modeled TP32 cycles | 6,472,368 | 5,825,568 | −9.99% |
+| Pixel stores | 1,075,200 | 1,075,200 | 0% |
+
+The fixed stream clears 84 rows and passes the pixel oracle with the
+same hashes and BMP as before. In boot profiles through `DESKTOP_LOOP`,
+both images clear 126 rows and the routine drops from 9,708,552 to
+8,738,352 modeled cycles. The BTL remains 5,480,872 bytes.
+
+The rebuilt `tpos_defconfig` BTL passes the protection self-test under
+emulator `-stp32 -sm 25` with hard-P enabled. All three BusyBox directory
+listing checks pass. The link audit checks 81,401 call relocations with zero
+mismatches. The captured desktop XRGB buffer matches the previous kernel
+byte for byte, with the same desktop SHA-256 recorded above.
+
+Row-clear BTL SHA-256:
+`21ea616ac97a5fb69bf01588e5d0dc6314b3c05ba510f449edab84cc489dbc86`.
+
+## Short pointer advances for row clearing
+
+STNL leaves only one live integer stack entry. Two assembly prototypes
+kept either the pointer or the fill value across stores and passed the
+pixel oracle. Including their call wrappers, they took 8,338,260 and
+8,539,944 modeled cycles respectively. The pointer prototype cut
+workspace loads and stores from 1,226,736 to 67,620, but stack shuffling
+and the shorter loop body made it slower.
+
+In the C loop, 15-pixel groups and a 10-pixel tail keep both the stores
+and pointer advances within single-byte encodings. Each loop branch
+covers 160 pixels. The fixed stream takes 5,763,408 modeled row-clear
+cycles, down 1.07% from 5,825,568. The boot profile records 8,645,112
+cycles, down from 8,738,352 across the same 126 row clears.
+
+The pixel oracle and the emulator desktop capture match the previous build
+byte for byte. The BTL reaches `DESKTOP_LOOP` with hard-P enabled.
+The protection self-test and BusyBox directory listing checks pass.
+The linker checks 81,401 call relocations with zero mismatches.
+
+BTL SHA-256:
+`af4e94010ae7517425c70014f57631391ff6541076b4dca809d1f335dface918`.

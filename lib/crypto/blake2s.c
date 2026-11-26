@@ -17,18 +17,36 @@
 #include <linux/unroll.h>
 #include <linux/types.h>
 
+/* Message word permutation for each of the ten rounds. */
+#define BLAKE2S_SIGMA_0(ROW) ROW(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+#define BLAKE2S_SIGMA_1(ROW) ROW(14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3)
+#define BLAKE2S_SIGMA_2(ROW) ROW(11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4)
+#define BLAKE2S_SIGMA_3(ROW) ROW(7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8)
+#define BLAKE2S_SIGMA_4(ROW) ROW(9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13)
+#define BLAKE2S_SIGMA_5(ROW) ROW(2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9)
+#define BLAKE2S_SIGMA_6(ROW) ROW(12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11)
+#define BLAKE2S_SIGMA_7(ROW) ROW(13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10)
+#define BLAKE2S_SIGMA_8(ROW) ROW(6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5)
+#define BLAKE2S_SIGMA_9(ROW) ROW(10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0)
+
+#ifdef __TCC_TRANSPUTER_ROTATE32__
+#define ror32(word, shift)	__builtin_rotateright32((word), (shift))
+#else
+#define SIGMA_VALUES(...) { __VA_ARGS__ }
 static const u8 blake2s_sigma[10][16] = {
-	{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 },
-	{ 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 },
-	{ 11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4 },
-	{ 7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8 },
-	{ 9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13 },
-	{ 2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9 },
-	{ 12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11 },
-	{ 13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10 },
-	{ 6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5 },
-	{ 10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0 },
+	BLAKE2S_SIGMA_0(SIGMA_VALUES),
+	BLAKE2S_SIGMA_1(SIGMA_VALUES),
+	BLAKE2S_SIGMA_2(SIGMA_VALUES),
+	BLAKE2S_SIGMA_3(SIGMA_VALUES),
+	BLAKE2S_SIGMA_4(SIGMA_VALUES),
+	BLAKE2S_SIGMA_5(SIGMA_VALUES),
+	BLAKE2S_SIGMA_6(SIGMA_VALUES),
+	BLAKE2S_SIGMA_7(SIGMA_VALUES),
+	BLAKE2S_SIGMA_8(SIGMA_VALUES),
+	BLAKE2S_SIGMA_9(SIGMA_VALUES),
 };
+#undef SIGMA_VALUES
+#endif
 
 static inline void blake2s_increment_counter(struct blake2s_ctx *ctx, u32 inc)
 {
@@ -61,32 +79,56 @@ blake2s_compress_generic(struct blake2s_ctx *ctx,
 		v[14] = BLAKE2S_IV6 ^ ctx->f[0];
 		v[15] = BLAKE2S_IV7 ^ ctx->f[1];
 
-#define G(r, i, a, b, c, d) do { \
-	a += b + m[blake2s_sigma[r][2 * i + 0]]; \
+#define G(x, y, a, b, c, d) do { \
+	a += b + m[x]; \
 	d = ror32(d ^ a, 16); \
 	c += d; \
 	b = ror32(b ^ c, 12); \
-	a += b + m[blake2s_sigma[r][2 * i + 1]]; \
+	a += b + m[y]; \
 	d = ror32(d ^ a, 8); \
 	c += d; \
 	b = ror32(b ^ c, 7); \
 } while (0)
 
+#define ROUND(s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, sa, sb, sc, sd, se, sf) do { \
+	G(s0, s1, v[0], v[4], v[8], v[12]); \
+	G(s2, s3, v[1], v[5], v[9], v[13]); \
+	G(s4, s5, v[2], v[6], v[10], v[14]); \
+	G(s6, s7, v[3], v[7], v[11], v[15]); \
+	G(s8, s9, v[0], v[5], v[10], v[15]); \
+	G(sa, sb, v[1], v[6], v[11], v[12]); \
+	G(sc, sd, v[2], v[7], v[8], v[13]); \
+	G(se, sf, v[3], v[4], v[9], v[14]); \
+} while (0)
+
+#ifdef __TCC_TRANSPUTER_ROTATE32__
+		/* TinyCC does not implement the unroll pragma. Expand the same
+		 * schedule with constant offsets into the workspace array.
+		 */
+		BLAKE2S_SIGMA_0(ROUND);
+		BLAKE2S_SIGMA_1(ROUND);
+		BLAKE2S_SIGMA_2(ROUND);
+		BLAKE2S_SIGMA_3(ROUND);
+		BLAKE2S_SIGMA_4(ROUND);
+		BLAKE2S_SIGMA_5(ROUND);
+		BLAKE2S_SIGMA_6(ROUND);
+		BLAKE2S_SIGMA_7(ROUND);
+		BLAKE2S_SIGMA_8(ROUND);
+		BLAKE2S_SIGMA_9(ROUND);
+#else
 		/*
 		 * Unroll the rounds loop to enable constant-folding of the
 		 * blake2s_sigma values.
 		 */
 		unrolled_full
 		for (int r = 0; r < 10; r++) {
-			G(r, 0, v[0], v[4], v[8], v[12]);
-			G(r, 1, v[1], v[5], v[9], v[13]);
-			G(r, 2, v[2], v[6], v[10], v[14]);
-			G(r, 3, v[3], v[7], v[11], v[15]);
-			G(r, 4, v[0], v[5], v[10], v[15]);
-			G(r, 5, v[1], v[6], v[11], v[12]);
-			G(r, 6, v[2], v[7], v[8], v[13]);
-			G(r, 7, v[3], v[4], v[9], v[14]);
+			const u8 *s = blake2s_sigma[r];
+
+			ROUND(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+			      s[8], s[9], s[10], s[11], s[12], s[13], s[14], s[15]);
 		}
+#endif
+#undef ROUND
 #undef G
 
 		for (i = 0; i < 8; ++i)

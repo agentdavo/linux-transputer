@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config TRANSPUTER
+	def_bool y
+	select ARCH_32BIT_OFF_T
+	select ARCH_HAS_BINFMT_FLAT
+	select ARCH_HAS_STRNCPY_FROM_USER
+	select ARCH_HAS_STRNLEN_USER
+	select ARCH_NO_PREEMPT
+	select ARCH_NO_SWAP
+	select BINFMT_FLAT_ARGVP_ENVP_ON_STACK
+	select BINFMT_FLAT_NO_DATA_START_OFFSET
+	select CPU_NO_EFFICIENT_FFS
+	select GENERIC_ATOMIC64
+	select GENERIC_CPU_DEVICES
+	select GENERIC_IRQ_PROBE
+	select GENERIC_IRQ_SHOW
+	select HAVE_PAGE_SIZE_4KB
+	select LOCK_MM_AND_FIND_VMA if MMU
+	select PHYS_ADDR_T_64BIT if MMU
+	select IRQ_DOMAIN
+	select NO_DMA
+	select UACCESS_MEMCPY if !MMU
+	help
+	  Support for the classic Transputer CPU family (TP32/TP32I/TP32X).
+	  This is a 32-bit, little-endian, no-MMU port, with optional SMP
+	  and paged-MMU support.
+
+config CPU_LITTLE_ENDIAN
+	def_bool y
+
+config MMU
+	bool "Experimental RTL page tables" if EXPERT
+	help
+	  Build the experimental 32-bit virtual, 40-bit physical paging port.
+	  The default TputeOS image uses NOMMU.
+
+config HIGHMEM
+	bool "High memory through the PGM1 window"
+	depends on MMU
+	select KMAP_LOCAL
+	default y
+	help
+	  Manage RAM the supervisor cannot address physically - all RAM
+	  above 4 GiB, and RAM0 above the window - as ZONE_HIGHMEM, mapped
+	  on demand through kmap_local/kmap in the translated window.
+
+config TRANSPUTER_PAGING_USER_SELFTEST
+	bool "Run a paged P-process through Linux faults at boot"
+	depends on MMU
+	default n
+	help
+	  Build an address space in a kernel thread, run hand-assembled
+	  P-process code in it, and check that absent-PTE faults go through
+	  the VMA and handle_mm_fault() and retire once, including frames
+	  exactly 4 GiB apart behind a VM_PFNMAP mapping (needs TP_HIGHMEM).
+
+config TRANSPUTER_PAGING_SELFTEST
+	bool "Run the early RTL fault and retry test"
+	depends on MMU
+	default n
+
+config PGTABLE_LEVELS
+	int
+	default 2 if MMU
+	default 1
+
+config FPU
+	def_bool y
+
+config GENERIC_CSUM
+	def_bool y
+
+config GENERIC_HWEIGHT
+	def_bool y
+
+config GENERIC_CALIBRATE_DELAY
+	def_bool y
+
+config NO_IOPORT_MAP
+	def_bool y
+
+config STACKTRACE_SUPPORT
+	def_bool y
+
+config LOCKDEP_SUPPORT
+	def_bool y
+
+config ARCH_HAS_CPU_RELAX
+	def_bool y
+
+config TIME_LOW_RES
+	def_bool y
+
+config SMP
+	select GENERIC_SMP_IDLE_THREAD
+	bool "Experimental SMP kernel build"
+	default n
+	help
+	  Build the SMP scheduler and synchronization paths. Secondary Linux
+	  CPUs require the shared-kernel memory map and polled IPI transport.
+	  Without that optional platform support, only CPU0 comes online.
+
+config NR_CPUS
+	int
+	default 6 if SMP
+	default 1
+
+config ARCH_FORCE_MAX_ORDER
+	int
+	default 12
+	help
+	  Allow buddy allocations up to 16 MiB (order 12).  NOMMU userspace
+	  gets anonymous memory as physically contiguous pages through the
+	  mmap2 syscall handler; DOOM's zone allocator alone needs a single
+	  6 MiB block, which the default order-10 (4 MiB) cap cannot serve.
+
+menu "Kernel features"
+
+config TRANSPUTER_SHARED_KERNEL
+	bool "Common kernel RAM and secondary Linux CPUs"
+	depends on SMP
+	default n
+	help
+	  Requires shared-kernel mode and ordered shared-board attachments.
+	  All kernel text, data and allocator RAM are common across CPUs.
+	  Secondary entry and polled IPIs use the shared board controller.
+
+config TRANSPUTER_SMP_BOOT
+	bool "Four-CPU shared-board bootstrap validation"
+	depends on !TRANSPUTER_SHARED_KERNEL
+	default n
+	help
+	  Release three secondary bootstrap images using the shared board,
+	  check distinct shared workspaces and contended atomic commands, then
+	  park the secondaries and continue the boot CPU into normal Linux.
+	  Requires four TP32X nodes and shared-board attachments in CPU order.
+	  This does not enable CONFIG_SMP or mark secondary CPUs Linux-online.
+
+
+source "kernel/Kconfig.hz"
+
+config TRANSPUTER_RAM_MIB
+	int "Installed RAM (MiB)"
+	range 24 256
+	default 32
+	help
+	  Amount of contiguous RAM starting at 0x80000000. Must match the
+	  platform memory size (32 MiB is -sm 25). The canonical display
+	  carveout is 0x81000000..0x81600000 (+16..+22 MiB), so 32 MiB is
+	  sufficient for full framebuffer desktop operation.
+
+config TRANSPUTER_L_THDS_BOOT
+	bool "Install L-process THDS early (selth)"
+	default n
+	help
+	  After BSS clear / during setup_arch, install a real trap-handler
+	  data structure (THDS) via TP32X selth so IntegerOverflow / Illegal
+	  become L-traps instead of G null-THDS halt. Handler logs 'T' on
+	  UART and attempts tret restore.
+
+endmenu
+
+config TRANSPUTER_DEBUG_HALT_AFTER_I5
+	bool "Transputer debug halt after I5"
+	default n
+	help
+	  Temporary bring-up option. If enabled, kernel_init() emits a marker
+	  immediately after I5 and then spins forever.
+
+# Upstream net/Kconfig defines NET_RX_BUSY_POLL as promptless with default y.
+# Adding a prompt here (sourced before net/Kconfig) lets defconfigs disable it.
+config NET_RX_BUSY_POLL
+	bool "Socket busy polling" if EXPERT
+	depends on NET

@@ -56,7 +56,9 @@
  * used in producing FLAT files, and because it seems to be large
  * enough to make all the gcc alignment related tests happy.
  */
+#ifndef FLAT_DATA_ALIGN
 #define FLAT_DATA_ALIGN	(0x20)
+#endif
 
 /*
  * User data (stack) also needs to be aligned.

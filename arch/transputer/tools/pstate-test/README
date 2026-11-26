@@ -1,0 +1,24 @@
+Linux protected-state regression (emulator with TP32X P-mode enabled)
+
+Use a disposable, built tinycc_transputer tree with the per-call syscall
+stub and a bootable rootfs. From the root of that tree:
+
+    bash transputer/linux-7/arch/transputer/tools/pstate-test/build.sh "$PWD" /tmp/pstate-overlay
+    bash transputer/rootfs/stage.sh
+    cp -a /tmp/pstate-overlay/. transputer/rootfs/output/stage/
+    (cd transputer/rootfs/output/stage && find . -print | cpio -o -H newc) > transputer/rootfs/output/rootfs.cpio
+
+Use a new path for the overlay. To keep this CPIO for the next kernel build,
+temporarily clear the execute bit on transputer/rootfs/stage.sh in the
+disposable copy. Build with transputer/build.sh --kernel and --btl, then
+boot with TP_PROTECT=1 and tp_hard_p. Restore the execute bit afterwards.
+
+Expect one P-STATE-PASS for each of 00000002, 00000001 and 00000000 in that
+order, PID1:pstate-ret=00000017, PID1:sh-spawn-ret=00000000, and DESKTOP_LOOP.
+A boot can reach the desktop despite reporting P-STATE-FAIL earlier.
+
+The overlay rebuilds PID 1 and two separate executables with the trap ABI
+enabled. Each uses the target instructions to seed and capture its own native
+FP state, flags, count and strides, then compares across a getpid or a
+synchronous spawn. The grandchild returns 37 to the child, which returns 23
+to PID 1. The probe only compares defined words in single-precision slots.
